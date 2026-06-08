@@ -15,7 +15,7 @@ class FakeTranscriptSource:
 
 class FakeAgent:
     def __init__(self, output):
-        self.output = output
+        self.outputs = output if isinstance(output, list) else [output]
         self.submitted = []
 
     def start(self):
@@ -25,7 +25,9 @@ class FakeAgent:
         self.submitted.append(text)
 
     def read_available(self):
-        return self.output
+        if len(self.outputs) == 1:
+            return self.outputs[0]
+        return self.outputs.pop(0)
 
     def stop(self):
         return None
@@ -89,6 +91,36 @@ def test_voice_loop_returns_false_when_no_transcript_is_available():
     assert handled is False
     assert agent.submitted == []
     assert speaker.said == []
+
+
+def test_voice_loop_runs_until_transcript_source_is_idle():
+    source = FakeTranscriptSource(["auth 버그 고쳐", "테스트는?"])
+    agent = FakeAgent(
+        [
+            "Modified:\n- auth.py\n\nTests:\n1 passed\n",
+            "Tests:\n2 passed\n",
+        ]
+    )
+    speaker = FakeSpeaker()
+    session = VoiceSession()
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        session=session,
+        collect_output=lambda agent: agent.read_available(),
+    )
+
+    handled_count = loop.run_until_idle()
+
+    assert handled_count == 2
+    assert agent.submitted == ["auth 버그 고쳐", "테스트는?"]
+    assert speaker.said == [
+        "파일 1개를 수정했고, 테스트 1개는 모두 통과했습니다.",
+        "테스트 2개는 모두 통과했습니다.",
+    ]
+    assert session.state is SessionState.LISTENING
 
 
 def test_voice_loop_stops_speaker_when_interrupt_arrives_while_speaking():

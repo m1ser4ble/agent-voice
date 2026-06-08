@@ -35,6 +35,16 @@ class VoiceLoop:
     interrupt: InterruptManager = field(default_factory=InterruptManager)
     collect_output: CollectOutput | None = None
 
+    def run_until_idle(self, *, max_turns: int | None = None) -> int:
+        handled_count = 0
+
+        while max_turns is None or handled_count < max_turns:
+            if not self.run_once():
+                break
+            handled_count += 1
+
+        return handled_count
+
     def run_once(self) -> bool:
         transcript = self.transcript_source.next_transcript()
         if transcript is None:

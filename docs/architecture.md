@@ -240,8 +240,10 @@ Current files:
 
 ## Voice Loop Contract
 
-`VoiceLoop` is now a test-backed synchronous component. The next step is wiring
-real transcript and speaker providers into it.
+`VoiceLoop` is now a test-backed synchronous component. It supports one-turn
+processing with `run_once()` and bounded continuous processing with
+`run_until_idle()`. The next step is wiring real transcript and speaker
+providers into it.
 
 Kokoro is already the intended TTS engine. The missing piece is the local
 `Speaker` component that wraps Kokoro behind a small interface, so the rest of
@@ -262,6 +264,7 @@ class Speaker(Protocol):
 
 class VoiceLoop:
     def run_once(self) -> bool: ...
+    def run_until_idle(self, *, max_turns: int | None = None) -> int: ...
 ```
 
 The loop should own this decision:

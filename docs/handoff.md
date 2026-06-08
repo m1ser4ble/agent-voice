@@ -60,6 +60,7 @@ Implemented:
 - interrupt phrase detection
 - `VoiceLoop` contract with `TranscriptSource` and `Speaker` protocols
 - `VoiceLoop.run_once()` command and interrupt paths covered by tests
+- `VoiceLoop.run_until_idle()` multi-turn path covered by tests
 - `agent-voice codex` reserved as the default voice-mode entrypoint
 - `agent-voice codex --text` persistent text session
 - `agent-voice codex --text --once` for smoke tests and automation
