@@ -115,6 +115,16 @@ These commands are not implemented yet. They describe the product boundary:
 `agent-voice` should assemble the local voice stack, not merely expose a set of
 Python classes.
 
+Current verified provider smoke:
+
+```bash
+uv run --extra voice-onnx python scripts/provider_smoke.py
+```
+
+This exercises Kokoro ONNX, faster-whisper, and Pipecat Smart Turn v3 together
+without Torch/CUDA dependencies. It is a provider-level integration check, not a
+full voice-loop E2E test.
+
 ## Replaceable Provider Design
 
 Adapter pattern is the right starting point, but it should be applied as small

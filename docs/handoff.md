@@ -71,6 +71,27 @@ Not implemented yet:
 - Pi / Claude Code adapters
 - agent state inspection
 
+## Provider Smoke Result
+
+The target local provider combination has been tested once in this repo:
+
+```bash
+uv run --extra voice-onnx python scripts/provider_smoke.py
+```
+
+Verified stack:
+
+- Kokoro ONNX generated `.cache/provider-smoke/kokoro-smoke.wav`.
+- faster-whisper `tiny.en` transcribed the generated audio as:
+  `Authentication bug fixed. One test passed.`
+- Pipecat Smart Turn v3.2 CPU ONNX returned `EndOfTurnState.COMPLETE`.
+- Observed Smart Turn probability: `0.947`.
+- Observed Smart Turn latency: about `46-48ms` in the project venv.
+
+This is provider-level smoke, not full product E2E. The repo still needs
+`TranscriptSource`, `Speaker`, and `VoiceLoop` components before mic-to-agent
+voice E2E is meaningful.
+
 ## Connecting Agents
 
 Codex is the current first-class path:

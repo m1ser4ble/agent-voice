@@ -120,6 +120,22 @@ Existing projects mostly solve adjacent problems:
 uv run pytest
 ```
 
+Run the real local provider smoke:
+
+```bash
+uv run --extra voice-onnx python scripts/provider_smoke.py
+```
+
+This installs the verified ONNX/light provider set and runs:
+
+```text
+Kokoro ONNX -> WAV -> faster-whisper -> Pipecat Smart Turn v3
+```
+
+The smoke downloads Kokoro model assets into `.cache/provider-smoke/` and uses
+`faster-whisper` `tiny.en` on CPU. It is not part of the default test suite
+because it downloads model files.
+
 Project notes:
 
 - Architecture: `docs/architecture.md`
