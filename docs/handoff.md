@@ -30,6 +30,8 @@ This is not primarily STT or TTS. The important product surface is:
 
 Detailed component architecture: `docs/architecture.md`
 
+Future project candidates and issue seeds: `docs/roadmap.md`
+
 ```text
 Mic
   -> Smart Turn
@@ -154,3 +156,12 @@ Recommended next task:
 5. Wire `agent-voice codex` to the full voice-mode path.
 
 Keep the public contract local-first and avoid Realtime API dependency.
+
+## Future Project Ideas
+
+See `docs/roadmap.md` for roadmap candidates:
+
+- LiteLLM one-shot agent adapter for broader API/local-model usage.
+- Portable ONNX provider profiles.
+- Mobile / Galaxy XR companion mode where the device is the mic/speaker/UI and
+  the workstation remains the agent runtime.

@@ -150,6 +150,7 @@ because it downloads model files.
 Project notes:
 
 - Architecture: `docs/architecture.md`
+- Roadmap: `docs/roadmap.md`
 - Design: `docs/superpowers/specs/2026-06-08-agent-voice-design.md`
 - Implementation plan: `docs/superpowers/plans/2026-06-08-agent-voice-mvp.md`
 - Handoff: `docs/handoff.md`
