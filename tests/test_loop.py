@@ -1,3 +1,5 @@
+import threading
+
 from agent_voice.interrupt import InterruptManager, SessionState, VoiceSession
 from agent_voice.loop import VoiceLoop
 from agent_voice.presenter import VoicePresenter
@@ -23,6 +25,24 @@ class PollingTranscriptSource:
         if not self.transcripts:
             return None
         return self.transcripts.pop(0)
+
+
+class InterruptDuringSpeechSource:
+    def __init__(self, first_transcript, interrupt_transcript, speaking_started):
+        self.first_transcript = first_transcript
+        self.interrupt_transcript = interrupt_transcript
+        self.speaking_started = speaking_started
+        self.interrupt_sent = False
+
+    def next_transcript(self):
+        if self.first_transcript is not None:
+            transcript = self.first_transcript
+            self.first_transcript = None
+            return transcript
+        if not self.speaking_started.is_set() or self.interrupt_sent:
+            return None
+        self.interrupt_sent = True
+        return self.interrupt_transcript
 
 
 class FakeAgent:
@@ -57,6 +77,24 @@ class FakeSpeaker:
 
     def stop(self):
         self.stops += 1
+
+
+class BlockingSpeaker:
+    def __init__(self, *, timeout=0.1):
+        self.said = []
+        self.stops = 0
+        self.timeout = timeout
+        self.started = threading.Event()
+        self.stopped = threading.Event()
+
+    def say(self, text):
+        self.said.append(text)
+        self.started.set()
+        self.stopped.wait(timeout=self.timeout)
+
+    def stop(self):
+        self.stops += 1
+        self.stopped.set()
 
 
 def test_voice_loop_sends_transcript_to_agent_and_speaks_presented_summary():
@@ -236,3 +274,68 @@ def test_voice_loop_stops_speaker_when_interrupt_arrives_while_speaking():
         SessionState.INTERRUPTED,
         SessionState.LISTENING,
     ]
+
+
+def test_voice_loop_polls_for_interrupts_while_speech_is_playing():
+    speaker = BlockingSpeaker()
+    source = InterruptDuringSpeechSource(
+        first_transcript="auth 버그 고쳐",
+        interrupt_transcript="잠깐",
+        speaking_started=speaker.started,
+    )
+    agent = FakeAgent("Modified:\n- auth.py\n\nTests:\n1 passed\n")
+    session = VoiceSession()
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        session=session,
+        interrupt=InterruptManager(stop_phrases=("잠깐",)),
+        collect_output=lambda agent: agent.read_available(),
+    )
+
+    handled = loop.run_once()
+
+    assert handled is True
+    assert agent.submitted == ["auth 버그 고쳐"]
+    assert speaker.said == ["파일 1개를 수정했고, 테스트 1개는 모두 통과했습니다."]
+    assert speaker.stops == 1
+    assert session.state is SessionState.LISTENING
+    assert session.history == [
+        SessionState.LISTENING,
+        SessionState.THINKING,
+        SessionState.SPEAKING,
+        SessionState.INTERRUPTED,
+        SessionState.LISTENING,
+    ]
+
+
+def test_voice_loop_ignores_non_interrupt_transcripts_while_speaking():
+    speaker = BlockingSpeaker(timeout=0.01)
+    source = InterruptDuringSpeechSource(
+        first_transcript="auth 버그 고쳐",
+        interrupt_transcript="테스트는?",
+        speaking_started=speaker.started,
+    )
+    agent = FakeAgent(
+        [
+            "Modified:\n- auth.py\n\nTests:\n1 passed\n",
+            "Tests:\n2 passed\n",
+        ]
+    )
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        interrupt=InterruptManager(stop_phrases=("잠깐",)),
+        collect_output=lambda agent: agent.read_available(),
+    )
+
+    first_handled = loop.run_once()
+    second_handled = loop.run_once()
+
+    assert first_handled is True
+    assert second_handled is False
+    assert agent.submitted == ["auth 버그 고쳐"]

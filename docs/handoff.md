@@ -64,6 +64,10 @@ Implemented:
 - `VoiceLoop.run_forever()` keeps polling during user silence and exits only on
   explicit exit intent
 - Runtime exit intent covered by tests: `이제 그만`, `종료`, `exit`, `quit`
+- Barge-in interrupt loop covered by tests: while `speaker.say()` is playing,
+  `VoiceLoop` keeps polling transcripts and calls `speaker.stop()` on `잠깐`
+- Non-interrupt transcripts during `SPEAKING` are ignored to avoid echoing the
+  spoken summary back into the agent as a command
 - `agent-voice codex` reserved as the default voice-mode entrypoint
 - `agent-voice codex --text` persistent text session
 - `agent-voice codex --text --once` for smoke tests and automation
@@ -76,7 +80,7 @@ Not implemented yet:
 - Whisper-backed `TranscriptSource`
 - Kokoro-backed `Speaker`
 - `agent-voice codex` full voice-mode wiring
-- true barge-in during audio playback
+- true mic/Kokoro-backed barge-in E2E during audio playback
 - Pi / Claude Code adapters
 - agent state inspection
 
@@ -98,9 +102,10 @@ Verified stack:
 - Observed Smart Turn latency: tens of milliseconds in the project venv.
 
 This is provider-level smoke, not full product E2E. The repo now has
-`TranscriptSource` and `Speaker` protocols plus a test-backed `VoiceLoop`, but
-still needs real mic/Whisper/Kokoro implementations before mic-to-agent voice
-E2E is meaningful.
+`TranscriptSource` and `Speaker` protocols plus a test-backed `VoiceLoop`.
+The loop now models runtime silence, explicit exit, and interrupt polling during
+speech playback, but still needs real mic/Whisper/Kokoro implementations before
+mic-to-agent voice E2E is meaningful.
 
 ## Connecting Agents
 

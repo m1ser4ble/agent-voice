@@ -72,7 +72,7 @@ flowchart LR
 | Component | Responsibility | Current Status |
 | --- | --- | --- |
 | `TranscriptSource` | Supplies completed user utterances from text, Whisper, or another input provider. | Protocol implemented in `loop.py`; real providers not implemented. CLI currently uses `input("> ")` directly. |
-| `VoiceLoop` | Coordinates transcript handling, agent submission, output collection, presentation, speaking, and interruption. | Implemented as a synchronous `run_once()` component with test doubles. Not wired to the CLI voice path yet. |
+| `VoiceLoop` | Coordinates transcript handling, agent submission, output collection, presentation, speaking, and interruption. | Implemented as a test-backed runtime loop. Speech playback runs in the background while the loop polls for interrupt transcripts. Not wired to the CLI voice path yet. |
 | `AgentAdapter` | Starts a coding agent, sends user input, and reads available agent output. | Implemented as `PexpectAgent`. |
 | `VoicePresenter` | Converts raw agent output into short speech-ready summaries. | Implemented as rule-based summaries. |
 | `Speaker` | Speaks presenter output and supports `stop()` for barge-in. Kokoro is the intended default TTS backend. | Protocol implemented in `loop.py`; Kokoro-backed speaker not implemented. CLI currently prints summaries. |
@@ -240,12 +240,25 @@ Current files:
 
 ## Voice Loop Contract
 
-`VoiceLoop` is now a test-backed synchronous component. It supports one-turn
-processing with `run_once()`, batch draining with `run_until_idle()`, and runtime
-polling with `run_forever()`. Silence or no transcript is not an exit condition;
-the runtime keeps listening until an explicit exit intent such as `이제 그만`,
-`종료`, `exit`, or `quit`. The next step is wiring real transcript and speaker
-providers into it.
+`VoiceLoop` is now a test-backed runtime component. It supports one-turn
+processing with `run_once()`, batch draining with `run_until_idle()`, and
+runtime polling with `run_forever()`. Silence or no transcript is not an exit
+condition; the runtime keeps listening until an explicit exit intent such as
+`이제 그만`, `종료`, `exit`, or `quit`.
+
+The important interrupt behavior is also owned by the loop. When presenter
+output is spoken, `VoiceLoop` starts `speaker.say(summary)` on a background
+thread and continues polling `TranscriptSource` while the session is
+`SPEAKING`. If an interrupt phrase such as `잠깐` arrives during playback, the
+loop calls `speaker.stop()`, transitions through `INTERRUPTED`, and resumes
+`LISTENING`.
+
+Non-interrupt transcripts observed while `SPEAKING` are ignored for now. That
+is intentional: without echo cancellation and stronger intent detection, queuing
+ordinary speech during TTS can feed the system's own spoken summary back into
+the coding agent as a new command.
+
+The next step is wiring real transcript and speaker providers into it.
 
 Kokoro is already the intended TTS engine. The missing piece is the local
 `Speaker` component that wraps Kokoro behind a small interface, so the rest of
@@ -278,22 +291,38 @@ class VoiceLoop:
 The loop should own this decision:
 
 ```text
-if session.state == SPEAKING and interrupt.should_interrupt(transcript, state):
-    speaker.stop()
-    session.interrupt()
-    session.resume_listening()
-else:
-    session.heard_command()
-    agent.submit(transcript)
-    raw_output = collect_agent_output(agent)
-    session.agent_responded()
-    summary = presenter.summarize(raw_output)
-    speaker.say(summary)
+session.heard_command()
+agent.submit(transcript)
+raw_output = collect_agent_output(agent)
+session.agent_responded()
+summary = presenter.summarize(raw_output)
+
+start speaker.say(summary) in background
+while speaker is playing:
+    transcript = transcript_source.next_transcript()
+    if should_exit(transcript):
+        speaker.stop()
+        agent.stop()
+        session.interrupt()
+        session.resume_listening()
+        break
+    elif interrupt.should_interrupt(transcript, SPEAKING):
+        speaker.stop()
+        session.interrupt()
+        session.resume_listening()
+        break
+    else:
+        ignore transcript while speaking
+
+if speech completes normally:
     session.tts_finished()
 ```
 
 This is the point where fake end-to-end tests become meaningful: they can verify
-the voice product loop instead of only verifying presenter output.
+the voice product loop instead of only verifying presenter output. The current
+tests cover command submission, runtime polling through silence, explicit exit
+intent, barge-in interruption while speech is playing, and ignoring
+non-interrupt transcripts during playback.
 
 ## Agent Adapter Strategy
 
@@ -305,8 +334,8 @@ Codex is currently controlled through `PexpectAgent`.
 uv run agent-voice codex
 ```
 
-This command is reserved for the default voice mode. Until `VoiceLoop` exists,
-the currently working development path is:
+This command is reserved for the default voice mode. Until the CLI voice path is
+wired to real providers, the currently working development path is:
 
 ```bash
 uv run agent-voice codex --text
