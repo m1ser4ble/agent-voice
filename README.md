@@ -50,11 +50,40 @@ Start a persistent Codex session:
 uv run agent-voice codex
 ```
 
-Use a different agent command:
+Use a different Codex command:
 
 ```bash
 uv run agent-voice codex --agent-command "codex --model gpt-5"
 ```
+
+### Connect to Pi
+
+`agent-voice` does not have a dedicated `pi` subcommand yet. The current
+fallback is to reuse the pexpect adapter and point it at the Pi CLI:
+
+```bash
+uv run agent-voice codex --agent-command pi
+```
+
+To continue the most recent Pi session, pass Pi's own session flag:
+
+```bash
+uv run agent-voice codex --agent-command "pi -c"
+```
+
+This keeps one long-lived `pi` process running and sends each transcript as
+terminal input, the same way the Codex MVP works. The intended stable interface
+is:
+
+```bash
+uv run agent-voice pi
+uv run agent-voice pi --continue
+```
+
+That dedicated Pi adapter is not implemented yet. It should prefer Pi's RPC or
+JSON event modes instead of scraping TUI text, because structured events are a
+better fit for voice summaries, interrupt handling, and "what are you doing
+now?" state answers.
 
 Send one command for smoke tests or automation:
 

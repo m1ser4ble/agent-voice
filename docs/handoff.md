@@ -69,6 +69,35 @@ Not implemented yet:
 - Pi / Claude Code adapters
 - agent state inspection
 
+## Connecting Agents
+
+Codex is the current first-class path:
+
+```bash
+uv run agent-voice codex
+```
+
+The current Pi fallback is:
+
+```bash
+uv run agent-voice codex --agent-command pi
+uv run agent-voice codex --agent-command "pi -c"
+```
+
+This works because the existing `PexpectAgent` can spawn any terminal command
+that accepts text input. It is a compatibility path, not the final Pi design.
+
+The intended Pi interface is:
+
+```bash
+uv run agent-voice pi
+uv run agent-voice pi --continue
+```
+
+Implement that with a Pi-specific adapter. Prefer Pi's structured RPC or JSON
+event modes over TUI scraping so the voice layer can derive agent state from
+events instead of raw terminal text.
+
 ## Next Session Task
 
 Recommended next task:
