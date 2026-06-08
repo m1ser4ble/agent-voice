@@ -27,12 +27,21 @@ class FakeAgent:
         return None
 
 
+class FakeVoiceLoop:
+    def __init__(self):
+        self.runs = 0
+
+    def run_forever(self):
+        self.runs += 1
+        return 0
+
+
 def test_cli_codex_once_sends_command_and_prints_voice_summary():
     agent = FakeAgent()
     output = StringIO()
 
     exit_code = main(
-        ["codex", "--text", "--once", "auth 버그 고쳐", "--poll-interval", "0"],
+        ["--text", "--once", "auth 버그 고쳐", "--poll-interval", "0", "codex"],
         agent_factory=lambda _: agent,
         output=output,
     )
@@ -62,7 +71,7 @@ def test_cli_codex_text_loop_keeps_one_agent_session_for_multiple_commands(monke
     monkeypatch.setattr("builtins.input", fake_input)
 
     exit_code = main(
-        ["codex", "--text", "--idle-reads", "1", "--poll-interval", "0"],
+        ["--text", "--idle-reads", "1", "--poll-interval", "0", "codex"],
         agent_factory=lambda _: agent,
         output=output,
     )
@@ -75,20 +84,25 @@ def test_cli_codex_text_loop_keeps_one_agent_session_for_multiple_commands(monke
     assert "테스트 2개는 모두 통과했습니다." in output.getvalue()
 
 
-def test_cli_codex_defaults_to_voice_mode_and_does_not_start_text_agent():
+def test_cli_codex_defaults_to_voice_mode_with_passthrough_agent_args():
     agent = FakeAgent()
+    voice_loop = FakeVoiceLoop()
     output = StringIO()
+    captured_commands = []
 
     exit_code = main(
-        ["codex"],
+        ["codex", "resume", "--model", "gpt-5"],
         agent_factory=lambda _: agent,
+        voice_loop_factory=lambda command, _: (
+            captured_commands.append(command) or voice_loop
+        ),
         output=output,
     )
 
-    assert exit_code == 2
+    assert exit_code == 0
     assert agent.starts == 0
-    assert "voice mode is not implemented yet" in output.getvalue()
-    assert "use --text" in output.getvalue()
+    assert voice_loop.runs == 1
+    assert captured_commands == [("codex", "resume", "--model", "gpt-5")]
 
 
 def test_cli_codex_once_requires_text_mode():
@@ -96,7 +110,7 @@ def test_cli_codex_once_requires_text_mode():
     output = StringIO()
 
     exit_code = main(
-        ["codex", "--once", "auth 버그 고쳐"],
+        ["--once", "auth 버그 고쳐", "codex"],
         agent_factory=lambda _: agent,
         output=output,
     )
@@ -104,6 +118,52 @@ def test_cli_codex_once_requires_text_mode():
     assert exit_code == 2
     assert agent.starts == 0
     assert "use --text --once" in output.getvalue()
+
+
+def test_cli_text_once_uses_voice_loop_exit_semantics():
+    agent = FakeAgent()
+
+    exit_code = main(
+        ["--text", "--once", "종료", "codex"],
+        agent_factory=lambda _: agent,
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert agent.submitted == []
+
+
+def test_cli_pi_text_once_uses_pi_target_with_passthrough_args():
+    agent = FakeAgent()
+    output = StringIO()
+    captured_commands = []
+
+    exit_code = main(
+        ["--text", "--once", "테스트는?", "pi", "-c"],
+        agent_factory=lambda command: captured_commands.append(command) or agent,
+        output=output,
+    )
+
+    assert exit_code == 0
+    assert captured_commands == [("pi", "-c")]
+    assert agent.submitted == ["테스트는?"]
+
+
+def test_cli_agent_options_after_target_are_not_parsed_as_product_options():
+    voice_loop = FakeVoiceLoop()
+    captured_commands = []
+
+    exit_code = main(
+        ["codex", "--text", "--once", "agent side option"],
+        voice_loop_factory=lambda command, _: (
+            captured_commands.append(command) or voice_loop
+        ),
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert voice_loop.runs == 1
+    assert captured_commands == [("codex", "--text", "--once", "agent side option")]
 
 
 class StreamingFakeAgent:

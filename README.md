@@ -27,20 +27,21 @@ The first working target is Codex.
 
 ## Current Status
 
-This repo currently contains the Codex MVP core:
+This repo currently contains the local voice MVP core:
 
 - `PexpectAgent`: spawns a terminal agent and submits transcript text as input
 - `VoicePresenter`: turns noisy agent output into short speech summaries
 - `InterruptManager`: detects stop phrases while the system is speaking
 - `VoiceSession`: tracks `LISTENING -> THINKING -> SPEAKING -> INTERRUPTED`
 - `VoiceLoop`: coordinates transcript, agent, presenter, speaker, and interrupt
-  contracts with test doubles
-- `agent-voice codex --text`: starts one persistent Codex session and keeps
-  sending keyboard text commands to that same process
-
-Audio capture, Smart Turn, Whisper, and Kokoro are intentionally next-step
-modules. The first commit keeps the hard agent boundary stable before adding
-device/audio complexity.
+  contracts
+- `MicrophoneWhisperTranscriptSource`: captures mic audio, segments speech with
+  a simple energy gate plus Smart Turn, and transcribes with faster-whisper
+- `KokoroSpeaker`: synthesizes presenter output with Kokoro ONNX and plays it
+  through the local speaker
+- `agent-voice codex ...`: starts voice mode by default and passes all target
+  args through to Codex
+- `agent-voice pi ...`: uses the same pexpect boundary for Pi
 
 ## Install
 
@@ -56,55 +57,62 @@ Voice mode entrypoint:
 uv run agent-voice codex
 ```
 
-Full voice mode is the intended default for this command, but the voice loop is
-not implemented yet. The command currently exits with guidance to use `--text`.
+Pass Codex options after the `codex` target. `agent-voice` does not parse these
+options, so Codex version changes should not require `agent-voice` CLI changes:
+
+```bash
+uv run agent-voice codex resume
+uv run agent-voice codex --model <model>
+uv run agent-voice codex resume --model <model>
+```
+
+Put `agent-voice` options before the target:
+
+```bash
+uv run agent-voice --language ko --whisper-model tiny --stt-language ko codex
+uv run agent-voice --tts-voice af_sarah codex --model <model>
+```
 
 Start the current persistent text-mode Codex session:
 
 ```bash
-uv run agent-voice codex --text
+uv run agent-voice --text codex
 ```
 
-Use a different Codex command in text mode:
+Text mode also passes Codex options through:
 
 ```bash
-uv run agent-voice codex --text --agent-command "codex --model gpt-5"
+uv run agent-voice --text codex resume --model <model>
 ```
 
 ### Connect to Pi
 
-`agent-voice` does not have a dedicated `pi` subcommand yet. The current
-fallback is to reuse the pexpect adapter and point it at the Pi CLI:
-
-```bash
-uv run agent-voice codex --text --agent-command pi
-```
-
-To continue the most recent Pi session, pass Pi's own session flag:
-
-```bash
-uv run agent-voice codex --text --agent-command "pi -c"
-```
-
-This keeps one long-lived `pi` process running and sends each transcript as
-terminal input, the same way the Codex MVP works. The intended stable interface
-is:
+Pi uses the same target passthrough model:
 
 ```bash
 uv run agent-voice pi
-uv run agent-voice pi --continue
+uv run agent-voice pi -c
 ```
 
-That dedicated Pi adapter is not implemented yet. It should prefer Pi's RPC or
-JSON event modes instead of scraping TUI text, because structured events are a
-better fit for voice summaries, interrupt handling, and "what are you doing
-now?" state answers.
-
-Send one command for smoke tests or automation:
+Text-mode Pi:
 
 ```bash
-uv run agent-voice codex --text --once "auth 버그 고쳐"
+uv run agent-voice --text pi -c
 ```
+
+Send one text command for smoke tests or automation:
+
+```bash
+uv run agent-voice --text --once "auth 버그 고쳐" codex
+uv run agent-voice --text --once "테스트는?" pi -c
+```
+
+### Current Voice Caveats
+
+The default voice path is wired, but it still needs real-device tuning. It uses
+local mic/speaker access through `sounddevice`, downloads Kokoro model assets
+into `.cache/agent-voice/kokoro/`, and uses CPU faster-whisper by default.
+System PortAudio/microphone permissions must be available.
 
 ## Why This Exists
 
@@ -131,13 +139,16 @@ Existing projects mostly solve adjacent problems:
 uv run pytest
 ```
 
+GitHub Actions runs the same test suite on Python 3.12 and 3.13, builds the
+package, and runs provider smoke on `main` pushes or manual dispatch.
+
 Run the real local provider smoke:
 
 ```bash
-uv run --extra voice-onnx python scripts/provider_smoke.py
+uv run python scripts/provider_smoke.py
 ```
 
-This installs the verified ONNX/light provider set and runs:
+This runs:
 
 ```text
 Kokoro ONNX -> WAV -> faster-whisper -> Pipecat Smart Turn v3
@@ -150,6 +161,7 @@ because it downloads model files.
 Project notes:
 
 - Architecture: `docs/architecture.md`
+- Testing strategy: `docs/testing.md`
 - Roadmap: `docs/roadmap.md`
 - Design: `docs/superpowers/specs/2026-06-08-agent-voice-design.md`
 - Implementation plan: `docs/superpowers/plans/2026-06-08-agent-voice-mvp.md`

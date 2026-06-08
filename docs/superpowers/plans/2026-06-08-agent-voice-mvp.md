@@ -50,9 +50,9 @@ be attached later without changing agent control semantics.
 - [x] Implement `PexpectAgent`.
 - [x] Implement `VoicePresenter`.
 - [x] Implement `InterruptManager` and `VoiceSession`.
-- [x] Implement `agent-voice codex --text --once`.
-- [x] Implement `agent-voice codex --text` as the persistent text loop.
-- [x] Reserve `agent-voice codex` as the default voice-mode entrypoint.
+- [x] Implement `agent-voice --text --once "..." codex`.
+- [x] Implement `agent-voice --text codex ...` as the persistent text loop.
+- [x] Implement `agent-voice codex ...` as the default voice-mode entrypoint.
 - [x] Collect agent output until idle instead of reading once.
 
 ### Task 4: Verification
@@ -62,7 +62,7 @@ be attached later without changing agent control semantics.
 
 - [ ] Run `uv run pytest`.
 - [ ] Run `uv run agent-voice --help`.
-- [ ] Run `uv run agent-voice codex --help`.
+- [ ] Run `uv run agent-voice --text --once "hello" codex`.
 
 ### Task 5: Next Implementation Plan
 
@@ -73,7 +73,7 @@ Completed follow-up:
 
 Recommended next plan:
 
-- [ ] Wire `agent-voice codex --text` through `VoiceLoop`.
-- [ ] Add Kokoro-backed `Speaker`.
-- [ ] Add Whisper-backed `TranscriptSource`.
-- [ ] Add Smart Turn command-boundary integration.
+- [x] Add Kokoro-backed `Speaker`.
+- [x] Add Whisper-backed `TranscriptSource`.
+- [x] Add Smart Turn command-boundary integration.
+- [ ] Run real hardware E2E and tune thresholds/latency.

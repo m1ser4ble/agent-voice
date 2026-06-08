@@ -71,13 +71,13 @@ flowchart LR
 
 | Component | Responsibility | Current Status |
 | --- | --- | --- |
-| `TranscriptSource` | Supplies completed user utterances from text, Whisper, or another input provider. | Protocol implemented in `loop.py`; real providers not implemented. CLI currently uses `input("> ")` directly. |
-| `VoiceLoop` | Coordinates transcript handling, agent submission, output collection, presentation, speaking, and interruption. | Implemented as a test-backed runtime loop. Speech playback runs in the background while the loop polls for interrupt transcripts. Not wired to the CLI voice path yet. |
-| `AgentAdapter` | Starts a coding agent, sends user input, and reads available agent output. | Implemented as `PexpectAgent`. |
+| `TranscriptSource` | Supplies completed user utterances from text, Whisper, or another input provider. | Protocol implemented in `loop.py`; `MicrophoneWhisperTranscriptSource` implemented in `providers.py` with mic capture, simple energy VAD, Smart Turn, and faster-whisper. Real-device tuning still needed. |
+| `VoiceLoop` | Coordinates transcript handling, agent submission, output collection, presentation, speaking, and interruption. | Implemented as a test-backed runtime loop and wired to the default CLI voice path. Speech playback runs in the background while the loop polls for interrupt transcripts. |
+| `AgentAdapter` | Starts a coding agent, sends user input, and reads available agent output. | Implemented as `PexpectAgent`; Codex and Pi both use opaque target-argument passthrough. |
 | `VoicePresenter` | Converts raw agent output into short speech-ready summaries. | Implemented as rule-based summaries. |
-| `Speaker` | Speaks presenter output and supports `stop()` for barge-in. Kokoro is the intended default TTS backend. | Protocol implemented in `loop.py`; Kokoro-backed speaker not implemented. CLI currently prints summaries. |
-| `InterruptManager` | Decides whether a transcript should interrupt speech in the current state. | Implemented and wired into `VoiceLoop`; not wired into CLI voice runtime yet. |
-| `VoiceSession` | Tracks `LISTENING`, `THINKING`, `SPEAKING`, and `INTERRUPTED`. | Implemented. Used by the CLI for basic state transitions. |
+| `Speaker` | Speaks presenter output and supports `stop()` for barge-in. Kokoro is the intended default TTS backend. | Protocol implemented in `loop.py`; `KokoroSpeaker` implemented in `providers.py` using Kokoro ONNX plus `sounddevice`. Real-device tuning still needed. |
+| `InterruptManager` | Decides whether a transcript should interrupt speech in the current state. | Implemented and wired into `VoiceLoop` and default CLI voice runtime. |
+| `VoiceSession` | Tracks `LISTENING`, `THINKING`, `SPEAKING`, and `INTERRUPTED`. | Implemented. |
 | `ProviderSetup` | Installs, configures, validates, and starts external providers such as Smart Turn/VAD, Whisper, Kokoro, and agent adapters. | Not implemented. |
 | `ConfigProfile` | Captures known-good local stack choices such as `local-cpu`, `apple-silicon`, `cuda`, `codex-only`, or `pi-rpc`. | Not implemented. |
 | `HealthChecks` | Verifies mic access, model files, audio output, provider versions, agent command availability, and expected latency. | Not implemented. |
@@ -108,22 +108,22 @@ The intended user-facing shape:
 uv run agent-voice doctor
 uv run agent-voice setup --profile local-cpu
 uv run agent-voice setup --profile apple-silicon
-uv run agent-voice codex --voice
+uv run agent-voice codex
 ```
 
-These commands are not implemented yet. They describe the product boundary:
-`agent-voice` should assemble the local voice stack, not merely expose a set of
-Python classes.
+`agent-voice codex` is now the default voice entrypoint. Setup/doctor/profile
+commands are still planned; they should make the local voice stack easier to
+validate before runtime.
 
 Current verified provider smoke:
 
 ```bash
-uv run --extra voice-onnx python scripts/provider_smoke.py
+uv run python scripts/provider_smoke.py
 ```
 
 This exercises Kokoro ONNX, faster-whisper, and Pipecat Smart Turn v3 together
 without Torch/CUDA dependencies. It is a provider-level integration check, not a
-full voice-loop E2E test.
+mic/speaker hardware E2E test.
 
 ## Replaceable Provider Design
 
@@ -207,34 +207,57 @@ detection, transcription, speech, provider setup, and health checks.
 
 ## Current MVP Component Map
 
-The current implementation is the non-audio MVP:
+The current default runtime is the local voice MVP:
+
+```mermaid
+flowchart LR
+    Mic[Microphone]
+    Source[MicrophoneWhisperTranscriptSource]
+    Loop[VoiceLoop]
+    Adapter[PexpectAgent]
+    Agent[Codex or Pi target command]
+    Presenter[VoicePresenter]
+    Speaker[KokoroSpeaker]
+    Session[VoiceSession]
+
+    Mic --> Source --> Loop
+    Loop --> Session
+    Loop --> Adapter
+    Adapter --> Agent
+    Agent --> Adapter
+    Adapter --> Loop
+    Loop --> Presenter --> Speaker
+```
+
+The text runtime remains as a development/debug path:
 
 ```mermaid
 flowchart LR
     UserText[CLI input]
-    CLILoop[agent-voice codex --text loop]
+    TextSource[SingleTranscriptSource]
+    Loop[VoiceLoop]
     Adapter[PexpectAgent]
-    Agent[Codex or --agent-command target]
+    Agent[Codex or Pi target command]
     Presenter[VoicePresenter]
     Stdout[stdout summary]
-    Session[VoiceSession]
 
-    UserText --> CLILoop
-    CLILoop --> Session
-    CLILoop --> Adapter
+    UserText --> TextSource --> Loop
+    Loop --> Adapter
     Adapter --> Agent
     Agent --> Adapter
-    Adapter --> CLILoop
-    CLILoop --> Presenter --> Stdout
+    Adapter --> Loop
+    Loop --> Presenter --> Stdout
 ```
 
 Current files:
 
 - `src/agent_voice/adapter.py`: `Agent` protocol and `PexpectAgent`
-- `src/agent_voice/cli.py`: voice-mode entrypoint, persistent Codex text loop,
-  and output collection
+- `src/agent_voice/cli.py`: target passthrough CLI, default voice entrypoint,
+  `SingleTranscriptSource` text debug path, and output collection
 - `src/agent_voice/loop.py`: `TranscriptSource`, `Speaker`, and `VoiceLoop`
   contracts
+- `src/agent_voice/providers.py`: local mic/Whisper transcript source,
+  Kokoro speaker, and managed voice-loop assembly
 - `src/agent_voice/presenter.py`: speech summary generation
 - `src/agent_voice/interrupt.py`: interrupt predicate and session state
 
@@ -258,12 +281,10 @@ is intentional: without echo cancellation and stronger intent detection, queuing
 ordinary speech during TTS can feed the system's own spoken summary back into
 the coding agent as a new command.
 
-The next step is wiring real transcript and speaker providers into it.
-
-Kokoro is already the intended TTS engine. The missing piece is the local
-`Speaker` component that wraps Kokoro behind a small interface, so the rest of
-the voice loop can call `say(text)` and `stop()` without depending on Kokoro
-internals.
+The current provider implementation wires `MicrophoneWhisperTranscriptSource`
+and `KokoroSpeaker` into the default CLI voice path. The next step is real
+hardware E2E tuning: mic thresholds, echo behavior, Kokoro language/voice
+quality, latency, and clearer doctor checks.
 
 Current shape:
 
@@ -334,35 +355,37 @@ Codex is currently controlled through `PexpectAgent`.
 uv run agent-voice codex
 ```
 
-This command is reserved for the default voice mode. Until the CLI voice path is
-wired to real providers, the currently working development path is:
+This command starts the default voice mode. The text debug path is:
 
 ```bash
-uv run agent-voice codex --text
+uv run agent-voice --text codex
 ```
 
-The text-mode adapter starts one long-lived Codex process and submits each
-typed command as terminal input.
+Codex options are passed through after the `codex` target and are not parsed by
+`agent-voice`:
+
+```bash
+uv run agent-voice codex resume
+uv run agent-voice codex --model <model>
+uv run agent-voice --text codex resume --model <model>
+```
+
+The text-mode adapter starts one long-lived Codex process with the same target
+command and submits each typed command as terminal input.
 
 ### Pi
 
-Pi can currently be connected through the same pexpect fallback:
-
-```bash
-uv run agent-voice codex --text --agent-command pi
-uv run agent-voice codex --text --agent-command "pi -c"
-```
-
-The stable target should be a dedicated Pi adapter:
+Pi uses the same pexpect target passthrough:
 
 ```bash
 uv run agent-voice pi
-uv run agent-voice pi --continue
+uv run agent-voice pi -c
+uv run agent-voice --text pi -c
 ```
 
-Prefer Pi's structured RPC or JSON event modes over TUI scraping. Structured
-events are a better source for speech summaries, agent state awareness, and
-interrupt behavior.
+Future Pi-specific adapters should prefer structured RPC or JSON event modes
+over TUI scraping. Structured events are a better source for speech summaries,
+agent state awareness, and interrupt behavior.
 
 ### Claude Code
 

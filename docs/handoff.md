@@ -30,6 +30,8 @@ This is not primarily STT or TTS. The important product surface is:
 
 Detailed component architecture: `docs/architecture.md`
 
+Testing strategy and hardware E2E definition: `docs/testing.md`
+
 Future project candidates and issue seeds: `docs/roadmap.md`
 
 ```text
@@ -43,12 +45,13 @@ Mic
   -> Speaker
 ```
 
-Current code implements the core non-audio boundary:
+Current code implements the core voice boundary:
 
 - `src/agent_voice/adapter.py`
 - `src/agent_voice/presenter.py`
 - `src/agent_voice/interrupt.py`
 - `src/agent_voice/loop.py`
+- `src/agent_voice/providers.py`
 - `src/agent_voice/cli.py`
 
 ## MVP Scope
@@ -71,19 +74,22 @@ Implemented:
 - Non-interrupt transcripts during `SPEAKING` are ignored to avoid echoing the
   spoken summary back into the agent as a command
 - `agent-voice codex` reserved as the default voice-mode entrypoint
-- `agent-voice codex --text` persistent text session
-- `agent-voice codex --text --once` for smoke tests and automation
+- `agent-voice codex ...` passes all target args through to Codex
+- `agent-voice pi ...` passes all target args through to Pi
+- `agent-voice --text codex ...` persistent text session
+- `agent-voice --text --once "..." codex ...` for smoke tests and automation
+- `MicrophoneWhisperTranscriptSource` implementation with mic capture, simple
+  energy VAD, Smart Turn, and faster-whisper
+- `KokoroSpeaker` implementation with Kokoro ONNX and `sounddevice`
+- default CLI voice-mode wiring through `VoiceLoop`
 - test coverage for all current modules
 
 Not implemented yet:
 
-- mic-backed `TranscriptSource`
-- Pipecat Smart Turn command-boundary integration
-- Whisper-backed `TranscriptSource`
-- Kokoro-backed `Speaker`
-- `agent-voice codex` full voice-mode wiring
-- true mic/Kokoro-backed barge-in E2E during audio playback
-- Pi / Claude Code adapters
+- real hardware E2E validation for mic -> Whisper -> agent -> Kokoro speaker
+- tuned mic thresholds, echo behavior, and latency budget
+- `agent-voice doctor` for mic, speaker, model assets, and agent command checks
+- Pi / Claude Code structured adapters
 - agent state inspection
 
 ## Provider Smoke Result
@@ -91,7 +97,7 @@ Not implemented yet:
 The target local provider combination has been tested once in this repo:
 
 ```bash
-uv run --extra voice-onnx python scripts/provider_smoke.py
+uv run python scripts/provider_smoke.py
 ```
 
 Verified stack:
@@ -103,11 +109,10 @@ Verified stack:
 - Observed Smart Turn probability: `0.947`.
 - Observed Smart Turn latency: tens of milliseconds in the project venv.
 
-This is provider-level smoke, not full product E2E. The repo now has
-`TranscriptSource` and `Speaker` protocols plus a test-backed `VoiceLoop`.
-The loop now models runtime silence, explicit exit, and interrupt polling during
-speech playback, but still needs real mic/Whisper/Kokoro implementations before
-mic-to-agent voice E2E is meaningful.
+This is provider-level smoke, not full product hardware E2E. The repo now has
+`MicrophoneWhisperTranscriptSource`, `KokoroSpeaker`, and a test-backed
+`VoiceLoop`, but the full mic-to-agent-to-speaker flow still needs real-device
+validation.
 
 ## Connecting Agents
 
@@ -118,27 +123,25 @@ uv run agent-voice codex
 ```
 
 This is now the voice-mode entrypoint. It currently reports that the voice loop
-is not implemented yet. Use text mode for the currently working path:
+is wired to local providers. Put Codex options after the `codex` target:
 
 ```bash
-uv run agent-voice codex --text
+uv run agent-voice codex resume
+uv run agent-voice codex --model <model>
 ```
 
-The current Pi fallback is:
+Use text mode for the keyboard-driven debug path:
 
 ```bash
-uv run agent-voice codex --text --agent-command pi
-uv run agent-voice codex --text --agent-command "pi -c"
+uv run agent-voice --text codex resume --model <model>
 ```
 
-This works because the existing `PexpectAgent` can spawn any terminal command
-that accepts text input. It is a compatibility path, not the final Pi design.
-
-The intended Pi interface is:
+Pi uses the same target passthrough:
 
 ```bash
 uv run agent-voice pi
-uv run agent-voice pi --continue
+uv run agent-voice pi -c
+uv run agent-voice --text pi -c
 ```
 
 Implement that with a Pi-specific adapter. Prefer Pi's structured RPC or JSON
@@ -149,11 +152,11 @@ events instead of raw terminal text.
 
 Recommended next task:
 
-1. Add a text-backed `TranscriptSource` implementation and wire `--text` through `VoiceLoop`.
-2. Add a Kokoro-backed `Speaker` implementation.
-3. Add a Whisper-backed `TranscriptSource`.
-4. Add Smart Turn command-boundary integration.
-5. Wire `agent-voice codex` to the full voice-mode path.
+1. Run real hardware E2E: `uv run agent-voice codex` with mic and speaker.
+2. Tune `MicrophoneWhisperTranscriptSource` thresholds and latency.
+3. Add `agent-voice doctor` for mic/speaker/model/agent command checks.
+4. Decide Kokoro language/voice defaults for Korean summaries.
+5. Add structured Pi / Claude Code adapters.
 
 Keep the public contract local-first and avoid Realtime API dependency.
 

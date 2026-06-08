@@ -1,0 +1,301 @@
+from __future__ import annotations
+
+import asyncio
+import queue
+import threading
+import urllib.request
+from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Protocol
+
+from agent_voice.adapter import Agent, PexpectAgent
+from agent_voice.loop import CollectOutput, VoiceLoop
+from agent_voice.presenter import VoicePresenter
+
+
+KOKORO_MODEL_URL = (
+    "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
+    "model-files-v1.0/kokoro-v1.0.onnx"
+)
+KOKORO_VOICES_URL = (
+    "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
+    "model-files-v1.0/voices-v1.0.bin"
+)
+
+
+class AudioPlayer(Protocol):
+    def play(self, audio: Any, sample_rate: int) -> None:
+        """Play audio and block until playback finishes."""
+
+    def stop(self) -> None:
+        """Stop currently playing audio."""
+
+
+class Closeable(Protocol):
+    def close(self) -> None:
+        """Release owned resources."""
+
+
+@dataclass
+class SoundDevicePlayer:
+    def play(self, audio: Any, sample_rate: int) -> None:
+        import sounddevice as sd
+
+        sd.play(audio, sample_rate, blocking=True)
+
+    def stop(self) -> None:
+        import sounddevice as sd
+
+        sd.stop()
+
+
+@dataclass
+class KokoroSpeaker:
+    kokoro: Any
+    player: AudioPlayer
+    voice: str = "af_sarah"
+    speed: float = 1.0
+    lang: str = "en-us"
+
+    @classmethod
+    def from_cache(
+        cls,
+        *,
+        cache_dir: Path,
+        voice: str = "af_sarah",
+        speed: float = 1.0,
+        lang: str = "en-us",
+    ) -> KokoroSpeaker:
+        from kokoro_onnx import Kokoro
+
+        model_path = cache_dir / "kokoro-v1.0.onnx"
+        voices_path = cache_dir / "voices-v1.0.bin"
+        _download_if_missing(KOKORO_MODEL_URL, model_path)
+        _download_if_missing(KOKORO_VOICES_URL, voices_path)
+        return cls(
+            kokoro=Kokoro(str(model_path), str(voices_path)),
+            player=SoundDevicePlayer(),
+            voice=voice,
+            speed=speed,
+            lang=lang,
+        )
+
+    def say(self, text: str) -> None:
+        audio, sample_rate = self.kokoro.create(
+            text,
+            voice=self.voice,
+            speed=self.speed,
+            lang=self.lang,
+        )
+        self.player.play(audio, sample_rate)
+
+    def stop(self) -> None:
+        self.player.stop()
+
+
+@dataclass
+class ManagedVoiceLoop:
+    loop: VoiceLoop
+    agent: Agent
+    closeables: Sequence[Closeable] = ()
+
+    def run_forever(self) -> int:
+        try:
+            self.agent.start()
+            return self.loop.run_forever()
+        finally:
+            self.agent.stop()
+            for closeable in self.closeables:
+                closeable.close()
+
+
+class MicrophoneWhisperTranscriptSource:
+    def __init__(
+        self,
+        *,
+        sample_rate: int = 16000,
+        chunk_ms: int = 100,
+        vad_threshold: float = 0.01,
+        silence_seconds: float = 0.7,
+        min_speech_seconds: float = 0.25,
+        max_utterance_seconds: float = 12.0,
+        whisper_model: str = "tiny",
+        whisper_language: str | None = None,
+        compute_type: str = "int8",
+        use_smart_turn: bool = True,
+    ) -> None:
+        import numpy as np
+        import sounddevice as sd
+        from faster_whisper import WhisperModel
+
+        self._np = np
+        self._sd = sd
+        self.sample_rate = sample_rate
+        self.chunk_ms = chunk_ms
+        self.chunk_size = max(1, int(sample_rate * chunk_ms / 1000))
+        self.vad_threshold = vad_threshold
+        self.silence_seconds = silence_seconds
+        self.min_speech_seconds = min_speech_seconds
+        self.max_utterance_seconds = max_utterance_seconds
+        self.whisper_language = whisper_language
+        self.use_smart_turn = use_smart_turn
+        self._transcripts: queue.Queue[str] = queue.Queue()
+        self._audio_chunks: queue.Queue[Any] = queue.Queue()
+        self._stop = threading.Event()
+        self._model = WhisperModel(whisper_model, device="cpu", compute_type=compute_type)
+        self._stream = sd.InputStream(
+            samplerate=sample_rate,
+            channels=1,
+            dtype="float32",
+            blocksize=self.chunk_size,
+            callback=self._on_audio,
+        )
+        self._worker = threading.Thread(target=self._run, daemon=True)
+        self._stream.start()
+        self._worker.start()
+
+    def next_transcript(self) -> str | None:
+        try:
+            return self._transcripts.get_nowait()
+        except queue.Empty:
+            return None
+
+    def close(self) -> None:
+        self._stop.set()
+        stop = getattr(self._stream, "stop", None)
+        close = getattr(self._stream, "close", None)
+        if stop is not None:
+            stop()
+        if close is not None:
+            close()
+        self._worker.join(timeout=1.0)
+
+    def _on_audio(self, indata: Any, frames: int, time_info: Any, status: Any) -> None:
+        if self._stop.is_set():
+            return
+        self._audio_chunks.put(indata.copy())
+
+    def _run(self) -> None:
+        buffer: list[Any] = []
+        silence_seconds = 0.0
+        speech_seconds = 0.0
+
+        while not self._stop.is_set():
+            try:
+                chunk = self._audio_chunks.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            mono = self._np.asarray(chunk, dtype=self._np.float32).reshape(-1)
+            chunk_seconds = len(mono) / self.sample_rate
+            rms = float(self._np.sqrt(self._np.mean(mono * mono))) if len(mono) else 0.0
+            is_speech = rms >= self.vad_threshold
+
+            if is_speech:
+                buffer.append(mono)
+                speech_seconds += chunk_seconds
+                silence_seconds = 0.0
+            elif buffer:
+                buffer.append(mono)
+                silence_seconds += chunk_seconds
+
+            if not buffer:
+                continue
+
+            if speech_seconds >= self.max_utterance_seconds:
+                self._finalize(buffer)
+                buffer = []
+                silence_seconds = 0.0
+                speech_seconds = 0.0
+                continue
+
+            if silence_seconds >= self.silence_seconds:
+                if speech_seconds >= self.min_speech_seconds:
+                    self._finalize(buffer)
+                buffer = []
+                silence_seconds = 0.0
+                speech_seconds = 0.0
+
+    def _finalize(self, chunks: Sequence[Any]) -> None:
+        audio = self._np.concatenate(chunks).astype(self._np.float32)
+        if self.use_smart_turn and not self._smart_turn_complete(audio):
+            return
+
+        segments, _ = self._model.transcribe(
+            audio,
+            language=self.whisper_language,
+            beam_size=1,
+        )
+        transcript = " ".join(segment.text.strip() for segment in segments).strip()
+        if transcript:
+            self._transcripts.put(transcript)
+
+    def _smart_turn_complete(self, audio: Any) -> bool:
+        try:
+            from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
+            from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
+                LocalSmartTurnAnalyzerV3,
+            )
+
+            analyzer = LocalSmartTurnAnalyzerV3(
+                sample_rate=self.sample_rate,
+                params=SmartTurnParams(
+                    stop_secs=self.silence_seconds,
+                    pre_speech_ms=0.0,
+                    max_duration_secs=self.max_utterance_seconds,
+                ),
+            )
+            clipped = self._np.clip(audio, -1.0, 1.0)
+            int16_audio = (clipped * 32767).astype(self._np.int16)
+            analyzer.append_audio(int16_audio.tobytes(), is_speech=True)
+            _, metrics = asyncio.run(analyzer.analyze_end_of_turn())
+            return metrics is None or metrics.is_complete
+        except Exception:
+            return True
+
+
+def build_local_voice_loop(
+    *,
+    command: tuple[str, ...],
+    language: str,
+    collect_output: CollectOutput,
+    cache_dir: Path,
+    whisper_model: str = "tiny",
+    whisper_language: str | None = None,
+    tts_voice: str = "af_sarah",
+    tts_lang: str = "en-us",
+    sample_rate: int = 16000,
+    vad_threshold: float = 0.01,
+) -> ManagedVoiceLoop:
+    agent = PexpectAgent(command=command)
+    transcript_source = MicrophoneWhisperTranscriptSource(
+        sample_rate=sample_rate,
+        vad_threshold=vad_threshold,
+        whisper_model=whisper_model,
+        whisper_language=whisper_language,
+    )
+    try:
+        speaker = KokoroSpeaker.from_cache(
+            cache_dir=cache_dir / "kokoro",
+            voice=tts_voice,
+            lang=tts_lang,
+        )
+    except Exception:
+        transcript_source.close()
+        raise
+    loop = VoiceLoop(
+        transcript_source=transcript_source,
+        agent=agent,
+        presenter=VoicePresenter(language=language),
+        speaker=speaker,
+        collect_output=collect_output,
+    )
+    return ManagedVoiceLoop(loop=loop, agent=agent, closeables=(transcript_source,))
+
+
+def _download_if_missing(url: str, path: Path) -> None:
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    urllib.request.urlretrieve(url, path)
