@@ -46,6 +46,7 @@ Current code implements the core non-audio boundary:
 - `src/agent_voice/adapter.py`
 - `src/agent_voice/presenter.py`
 - `src/agent_voice/interrupt.py`
+- `src/agent_voice/loop.py`
 - `src/agent_voice/cli.py`
 
 ## MVP Scope
@@ -57,6 +58,8 @@ Implemented:
 - Korean/English rule-based speech summaries
 - session state machine
 - interrupt phrase detection
+- `VoiceLoop` contract with `TranscriptSource` and `Speaker` protocols
+- `VoiceLoop.run_once()` command and interrupt paths covered by tests
 - `agent-voice codex` reserved as the default voice-mode entrypoint
 - `agent-voice codex --text` persistent text session
 - `agent-voice codex --text --once` for smoke tests and automation
@@ -64,10 +67,11 @@ Implemented:
 
 Not implemented yet:
 
-- mic capture
-- Pipecat Smart Turn integration
-- Whisper integration
-- Kokoro playback
+- mic-backed `TranscriptSource`
+- Pipecat Smart Turn command-boundary integration
+- Whisper-backed `TranscriptSource`
+- Kokoro-backed `Speaker`
+- `agent-voice codex` full voice-mode wiring
 - true barge-in during audio playback
 - Pi / Claude Code adapters
 - agent state inspection
@@ -89,9 +93,10 @@ Verified stack:
 - Observed Smart Turn probability: `0.947`.
 - Observed Smart Turn latency: tens of milliseconds in the project venv.
 
-This is provider-level smoke, not full product E2E. The repo still needs
-`TranscriptSource`, `Speaker`, and `VoiceLoop` components before mic-to-agent
-voice E2E is meaningful.
+This is provider-level smoke, not full product E2E. The repo now has
+`TranscriptSource` and `Speaker` protocols plus a test-backed `VoiceLoop`, but
+still needs real mic/Whisper/Kokoro implementations before mic-to-agent voice
+E2E is meaningful.
 
 ## Connecting Agents
 
@@ -133,10 +138,10 @@ events instead of raw terminal text.
 
 Recommended next task:
 
-1. Add audio provider interfaces: `TurnDetector`, `Transcriber`, `Speaker`.
-2. Add a fake audio pipeline test first.
-3. Implement a text-backed `VoiceLoop` that wires transcript -> agent -> presenter -> speaker.
-4. Add Kokoro as an optional `audio` extra after the interface is stable.
-5. Add Whisper after the transcript interface is stable.
+1. Add a text-backed `TranscriptSource` implementation and wire `--text` through `VoiceLoop`.
+2. Add a Kokoro-backed `Speaker` implementation.
+3. Add a Whisper-backed `TranscriptSource`.
+4. Add Smart Turn command-boundary integration.
+5. Wire `agent-voice codex` to the full voice-mode path.
 
 Keep the public contract local-first and avoid Realtime API dependency.

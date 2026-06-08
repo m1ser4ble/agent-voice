@@ -33,6 +33,8 @@ This repo currently contains the Codex MVP core:
 - `VoicePresenter`: turns noisy agent output into short speech summaries
 - `InterruptManager`: detects stop phrases while the system is speaking
 - `VoiceSession`: tracks `LISTENING -> THINKING -> SPEAKING -> INTERRUPTED`
+- `VoiceLoop`: coordinates transcript, agent, presenter, speaker, and interrupt
+  contracts with test doubles
 - `agent-voice codex --text`: starts one persistent Codex session and keeps
   sending keyboard text commands to that same process
 

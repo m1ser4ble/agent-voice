@@ -66,9 +66,14 @@ be attached later without changing agent control semantics.
 
 ### Task 5: Next Implementation Plan
 
+Completed follow-up:
+
+- [x] Add `src/agent_voice/loop.py` with provider protocols.
+- [x] Add fake transcript-to-speaker tests.
+
 Recommended next plan:
 
-- [ ] Add `src/agent_voice/audio.py` with provider protocols.
-- [ ] Add `src/agent_voice/loop.py` with a fake transcript-to-speaker test.
-- [ ] Add Kokoro as an optional speaker after the protocol test is green.
-- [ ] Add Whisper as an optional transcriber after the transcript boundary is stable.
+- [ ] Wire `agent-voice codex --text` through `VoiceLoop`.
+- [ ] Add Kokoro-backed `Speaker`.
+- [ ] Add Whisper-backed `TranscriptSource`.
+- [ ] Add Smart Turn command-boundary integration.

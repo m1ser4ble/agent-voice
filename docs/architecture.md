@@ -71,12 +71,12 @@ flowchart LR
 
 | Component | Responsibility | Current Status |
 | --- | --- | --- |
-| `TranscriptSource` | Supplies completed user utterances from text, Whisper, or another input provider. | Not implemented. CLI currently uses `input("> ")` directly. |
-| `VoiceLoop` | Coordinates transcript handling, agent submission, output collection, presentation, speaking, and interruption. | Not implemented as a standalone component. The CLI currently hardcodes a minimal loop. |
+| `TranscriptSource` | Supplies completed user utterances from text, Whisper, or another input provider. | Protocol implemented in `loop.py`; real providers not implemented. CLI currently uses `input("> ")` directly. |
+| `VoiceLoop` | Coordinates transcript handling, agent submission, output collection, presentation, speaking, and interruption. | Implemented as a synchronous `run_once()` component with test doubles. Not wired to the CLI voice path yet. |
 | `AgentAdapter` | Starts a coding agent, sends user input, and reads available agent output. | Implemented as `PexpectAgent`. |
 | `VoicePresenter` | Converts raw agent output into short speech-ready summaries. | Implemented as rule-based summaries. |
-| `Speaker` | Speaks presenter output and supports `stop()` for barge-in. Kokoro is the intended default TTS backend. | Not implemented as code yet. CLI currently prints summaries. |
-| `InterruptManager` | Decides whether a transcript should interrupt speech in the current state. | Implemented as a predicate. Not wired into the CLI loop yet. |
+| `Speaker` | Speaks presenter output and supports `stop()` for barge-in. Kokoro is the intended default TTS backend. | Protocol implemented in `loop.py`; Kokoro-backed speaker not implemented. CLI currently prints summaries. |
+| `InterruptManager` | Decides whether a transcript should interrupt speech in the current state. | Implemented and wired into `VoiceLoop`; not wired into CLI voice runtime yet. |
 | `VoiceSession` | Tracks `LISTENING`, `THINKING`, `SPEAKING`, and `INTERRUPTED`. | Implemented. Used by the CLI for basic state transitions. |
 | `ProviderSetup` | Installs, configures, validates, and starts external providers such as Smart Turn/VAD, Whisper, Kokoro, and agent adapters. | Not implemented. |
 | `ConfigProfile` | Captures known-good local stack choices such as `local-cpu`, `apple-silicon`, `cuda`, `codex-only`, or `pi-rpc`. | Not implemented. |
@@ -233,20 +233,22 @@ Current files:
 - `src/agent_voice/adapter.py`: `Agent` protocol and `PexpectAgent`
 - `src/agent_voice/cli.py`: voice-mode entrypoint, persistent Codex text loop,
   and output collection
+- `src/agent_voice/loop.py`: `TranscriptSource`, `Speaker`, and `VoiceLoop`
+  contracts
 - `src/agent_voice/presenter.py`: speech summary generation
 - `src/agent_voice/interrupt.py`: interrupt predicate and session state
 
-## Target Voice Loop Contract
+## Voice Loop Contract
 
-The next important architectural step is to turn the hardcoded CLI flow into a
-testable `VoiceLoop`.
+`VoiceLoop` is now a test-backed synchronous component. The next step is wiring
+real transcript and speaker providers into it.
 
 Kokoro is already the intended TTS engine. The missing piece is the local
 `Speaker` component that wraps Kokoro behind a small interface, so the rest of
 the voice loop can call `say(text)` and `stop()` without depending on Kokoro
 internals.
 
-Expected shape:
+Current shape:
 
 ```python
 class TranscriptSource(Protocol):
@@ -259,7 +261,7 @@ class Speaker(Protocol):
 
 
 class VoiceLoop:
-    def run_once(self) -> None: ...
+    def run_once(self) -> bool: ...
 ```
 
 The loop should own this decision:
