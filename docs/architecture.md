@@ -1,8 +1,13 @@
 # Component Architecture
 
 `agent-voice` is a local voice layer around terminal coding agents. The core
-design is component-based: audio, agent control, presentation, and interruption
-are separate boundaries.
+design is component-based: audio, agent control, presentation, interruption, and
+provider assembly are separate boundaries.
+
+The product value is not only the custom code. A large part of the value is
+assembling compatible local components, setting sane defaults, and hiding the
+rough edges between Smart Turn/VAD, Whisper, Kokoro, terminal agents, and
+platform audio.
 
 ## Target Components
 
@@ -33,6 +38,18 @@ flowchart LR
         Speaker[Speaker / Kokoro backend]
     end
 
+    subgraph Assembly
+        Config[Config Profiles]
+        Setup[Provider Setup]
+        Health[Health Checks]
+    end
+
+    Config --> Setup
+    Setup --> TurnDetector
+    Setup --> Transcriber
+    Setup --> Speaker
+    Setup --> Adapter
+    Setup --> Health
     Mic --> TurnDetector --> Transcriber --> TranscriptSource
     TranscriptSource --> VoiceLoop
     VoiceLoop --> Session
@@ -61,6 +78,42 @@ flowchart LR
 | `Speaker` | Speaks presenter output and supports `stop()` for barge-in. Kokoro is the intended default TTS backend. | Not implemented as code yet. CLI currently prints summaries. |
 | `InterruptManager` | Decides whether a transcript should interrupt speech in the current state. | Implemented as a predicate. Not wired into the CLI loop yet. |
 | `VoiceSession` | Tracks `LISTENING`, `THINKING`, `SPEAKING`, and `INTERRUPTED`. | Implemented. Used by the CLI for basic state transitions. |
+| `ProviderSetup` | Installs, configures, validates, and starts external providers such as Smart Turn/VAD, Whisper, Kokoro, and agent adapters. | Not implemented. |
+| `ConfigProfile` | Captures known-good local stack choices such as `local-cpu`, `apple-silicon`, `cuda`, `codex-only`, or `pi-rpc`. | Not implemented. |
+| `HealthChecks` | Verifies mic access, model files, audio output, provider versions, agent command availability, and expected latency. | Not implemented. |
+
+## Assembly Layer
+
+The voice stack depends on several external components. `agent-voice` should
+make those components feel like one product by managing configuration,
+capability detection, startup order, and health checks.
+
+Planned assembly responsibilities:
+
+- Detect platform capabilities: OS, CPU/GPU, audio devices, Python version, and
+  available agent CLIs.
+- Select a profile: for example `local-cpu`, `apple-silicon`, `cuda`,
+  `codex-pexpect`, or `pi-rpc`.
+- Install or verify optional providers without forcing every dependency on
+  every user.
+- Download or locate model assets for Whisper, Smart Turn/VAD, and Kokoro.
+- Validate that mic input, speaker output, and agent command execution work
+  before starting the full loop.
+- Start providers in the right order and expose clear diagnostics when one
+  layer fails.
+
+The intended user-facing shape:
+
+```bash
+uv run agent-voice doctor
+uv run agent-voice setup --profile local-cpu
+uv run agent-voice setup --profile apple-silicon
+uv run agent-voice codex --voice
+```
+
+These commands are not implemented yet. They describe the product boundary:
+`agent-voice` should assemble the local voice stack, not merely expose a set of
+Python classes.
 
 ## Current MVP Component Map
 

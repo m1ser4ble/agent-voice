@@ -6,6 +6,10 @@ Local-first voice layer for terminal coding agents.
 that sits on top of terminal coding agents like Codex, Pi, and Claude Code
 without modifying them.
 
+Part of the value is assembly: choosing compatible local components, wiring
+them together, and providing sane defaults for Smart Turn/VAD, Whisper, Kokoro,
+and terminal-agent adapters so users do not have to hand-build a voice stack.
+
 The long-term target is a voice operating layer for coding agents:
 
 ```text
@@ -105,6 +109,7 @@ Existing projects mostly solve adjacent problems:
 - local-first by default
 - no Realtime API dependency
 - no agent internals patching
+- assembled local voice stack with sane defaults
 - shared adapters for Codex, Pi, and Claude Code
 - Voice Presenter as a first-class module
 - interrupt/barge-in as part of the core state machine
