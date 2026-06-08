@@ -375,16 +375,55 @@ structured adapter.
 ```mermaid
 stateDiagram-v2
     [*] --> LISTENING
-    LISTENING --> THINKING: transcript command
-    THINKING --> SPEAKING: agent output summarized
-    SPEAKING --> LISTENING: speaker finished
-    SPEAKING --> INTERRUPTED: stop phrase
+    LISTENING --> THINKING: non-empty command transcript
+    THINKING --> SPEAKING: agent output collected
+    SPEAKING --> LISTENING: speech finished or no summary
+    SPEAKING --> INTERRUPTED: stop or exit phrase during speech
     INTERRUPTED --> LISTENING: resume listening
+    LISTENING --> [*]: exit phrase
 ```
+
+`VoiceSession` owns user-facing session state. Runtime shutdown is tracked
+separately by `VoiceLoop.should_exit`; it is not currently a `SessionState`.
+
+| State | Meaning | Active owner | What should be happening |
+| --- | --- | --- | --- |
+| `LISTENING` | Ready for the next user command. | `TranscriptSource` and `VoiceLoop` | Poll completed transcripts. No transcript means idle, not exit. |
+| `THINKING` | A user command was submitted to the coding agent. | `AgentAdapter` and output collector | Wait for available agent output. |
+| `SPEAKING` | Agent output has been summarized and is being presented. | `Speaker`, `VoicePresenter`, and `VoiceLoop` interrupt poller | Speak summary while still polling transcripts for interrupt or exit intent. |
+| `INTERRUPTED` | Speech playback was stopped by the user. | `InterruptManager` and `VoiceLoop` | Stop speaker, then immediately return to `LISTENING`. |
+
+Current transition triggers:
+
+| From | To | Trigger | Code path | Notes |
+| --- | --- | --- | --- | --- |
+| initial | `LISTENING` | `VoiceSession()` construction | `VoiceSession.state` default | History starts with `LISTENING`. |
+| `LISTENING` | `LISTENING` | `TranscriptSource.next_transcript()` returns `None` or empty text | `VoiceLoop.run_once()` | In `run_forever()`, this only sleeps briefly and polls again. Silence never stops the product runtime. |
+| `LISTENING` | runtime stopped | Exit phrase such as `이제 그만`, `종료`, `exit`, or `quit` | `VoiceLoop.run_once()` -> `_should_exit()` | Calls `speaker.stop()`, `agent.stop()`, and sets `should_exit=True`. It does not submit text to the agent. |
+| `LISTENING` | `THINKING` | Non-empty transcript that is neither exit nor interrupt | `VoiceLoop.run_once()` -> `session.heard_command()` | The transcript is then sent to `agent.submit(transcript)`. |
+| `THINKING` | `SPEAKING` | Agent output collection completes | `VoiceLoop.run_once()` -> `session.agent_responded()` | The raw output is summarized by `VoicePresenter`. |
+| `SPEAKING` | `LISTENING` | Summary speech finishes normally | `_speak_interruptibly()` -> `session.tts_finished()` | `speaker.say(summary)` runs in a background thread while the loop polls for interrupts. |
+| `SPEAKING` | `LISTENING` | Presenter returns no speakable summary | `VoiceLoop.run_once()` -> `session.tts_finished()` | The state still briefly enters `SPEAKING` after agent response, then returns to `LISTENING`. |
+| `SPEAKING` | `INTERRUPTED` | Stop phrase such as `잠깐`, `멈춰`, `stop`, or `pause` | `_handle_speaking_transcript()` -> `speaker.stop()` -> `session.interrupt()` | Only valid while speaking. The default behavior stops TTS, not the coding agent. |
+| `INTERRUPTED` | `LISTENING` | Interrupt handling completes | `_handle_speaking_transcript()` -> `session.resume_listening()` | This transition is immediate in the current loop. |
+| `SPEAKING` | `INTERRUPTED` -> `LISTENING` plus runtime stopped | Exit phrase during speech | `_handle_speaking_transcript()` -> `_should_exit()` | Stops speaker and agent, sets `should_exit=True`, then resumes listening state before the runtime loop exits. |
+| `SPEAKING` | `SPEAKING` | Non-interrupt transcript during playback | `_handle_speaking_transcript()` | Ignored to avoid echoing spoken summaries back into the agent as new commands. |
+
+The important split is:
+
+- Turn completion is input-level state: Smart Turn/VAD and Whisper decide when
+  a transcript is ready.
+- Session state is product-level state: `VoiceSession` tracks what the voice
+  layer is doing with that transcript.
+- Agent state is future work: Codex/Pi/Claude may expose richer progress such
+  as "running tests" or "editing files", but that should be a separate agent
+  observation model instead of overloading `VoiceSession`.
 
 Default interrupt semantics:
 
 - `잠깐`, `멈춰`, `stop`, or `pause` stops speech playback only.
+- Stop phrases are interrupt commands only while the session is `SPEAKING`.
+  Outside `SPEAKING`, they are not consumed by `InterruptManager`.
 - It should not cancel the coding agent by default.
 - `이제 그만`, `종료`, `exit`, or `quit` exits the voice runtime and stops the
   agent process.
