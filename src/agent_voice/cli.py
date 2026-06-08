@@ -36,6 +36,22 @@ def _run_codex(
     agent_factory: AgentFactory | None,
     output: TextIO,
 ) -> int:
+    if args.once is not None and not args.text:
+        print(
+            "agent-voice codex --once is a text-mode smoke path; "
+            "use --text --once.",
+            file=output,
+        )
+        return 2
+
+    if not args.text:
+        print(
+            "agent-voice codex voice mode is not implemented yet. "
+            "use --text for the current keyboard-driven development loop.",
+            file=output,
+        )
+        return 2
+
     command = tuple(shlex.split(args.agent_command))
     if not command:
         raise ValueError("--agent-command must not be empty")
@@ -136,7 +152,15 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="agent", required=True)
 
     codex = subparsers.add_parser("codex", help="Wrap Codex CLI.")
-    codex.add_argument("--once", help="Send one command and summarize current output.")
+    codex.add_argument(
+        "--text",
+        action="store_true",
+        help="Use the current keyboard-driven text loop instead of voice mode.",
+    )
+    codex.add_argument(
+        "--once",
+        help="Text-mode smoke path: send one command and summarize current output.",
+    )
     codex.add_argument(
         "--agent-command",
         default="codex",

@@ -32,7 +32,7 @@ def test_cli_codex_once_sends_command_and_prints_voice_summary():
     output = StringIO()
 
     exit_code = main(
-        ["codex", "--once", "auth 버그 고쳐", "--poll-interval", "0"],
+        ["codex", "--text", "--once", "auth 버그 고쳐", "--poll-interval", "0"],
         agent_factory=lambda _: agent,
         output=output,
     )
@@ -42,7 +42,7 @@ def test_cli_codex_once_sends_command_and_prints_voice_summary():
     assert "파일 1개를 수정했고, 테스트 1개는 모두 통과했습니다." in output.getvalue()
 
 
-def test_cli_codex_default_loop_keeps_one_agent_session_for_multiple_commands(monkeypatch):
+def test_cli_codex_text_loop_keeps_one_agent_session_for_multiple_commands(monkeypatch):
     agent = FakeAgent()
     agent.chunks = [
         "Modified:\n- auth.py\n\nTests:\n1 passed\n",
@@ -62,7 +62,7 @@ def test_cli_codex_default_loop_keeps_one_agent_session_for_multiple_commands(mo
     monkeypatch.setattr("builtins.input", fake_input)
 
     exit_code = main(
-        ["codex", "--idle-reads", "1", "--poll-interval", "0"],
+        ["codex", "--text", "--idle-reads", "1", "--poll-interval", "0"],
         agent_factory=lambda _: agent,
         output=output,
     )
@@ -73,6 +73,37 @@ def test_cli_codex_default_loop_keeps_one_agent_session_for_multiple_commands(mo
     assert agent.submitted == ["auth 버그 고쳐", "테스트는?"]
     assert "테스트 1개는 모두 통과했습니다." in output.getvalue()
     assert "테스트 2개는 모두 통과했습니다." in output.getvalue()
+
+
+def test_cli_codex_defaults_to_voice_mode_and_does_not_start_text_agent():
+    agent = FakeAgent()
+    output = StringIO()
+
+    exit_code = main(
+        ["codex"],
+        agent_factory=lambda _: agent,
+        output=output,
+    )
+
+    assert exit_code == 2
+    assert agent.starts == 0
+    assert "voice mode is not implemented yet" in output.getvalue()
+    assert "use --text" in output.getvalue()
+
+
+def test_cli_codex_once_requires_text_mode():
+    agent = FakeAgent()
+    output = StringIO()
+
+    exit_code = main(
+        ["codex", "--once", "auth 버그 고쳐"],
+        agent_factory=lambda _: agent,
+        output=output,
+    )
+
+    assert exit_code == 2
+    assert agent.starts == 0
+    assert "use --text --once" in output.getvalue()
 
 
 class StreamingFakeAgent:

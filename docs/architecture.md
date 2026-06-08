@@ -212,7 +212,7 @@ The current implementation is the non-audio MVP:
 ```mermaid
 flowchart LR
     UserText[CLI input]
-    CLILoop[agent-voice codex loop]
+    CLILoop[agent-voice codex --text loop]
     Adapter[PexpectAgent]
     Agent[Codex or --agent-command target]
     Presenter[VoicePresenter]
@@ -231,7 +231,8 @@ flowchart LR
 Current files:
 
 - `src/agent_voice/adapter.py`: `Agent` protocol and `PexpectAgent`
-- `src/agent_voice/cli.py`: persistent Codex text loop and output collection
+- `src/agent_voice/cli.py`: voice-mode entrypoint, persistent Codex text loop,
+  and output collection
 - `src/agent_voice/presenter.py`: speech summary generation
 - `src/agent_voice/interrupt.py`: interrupt predicate and session state
 
@@ -291,16 +292,23 @@ Codex is currently controlled through `PexpectAgent`.
 uv run agent-voice codex
 ```
 
-The adapter starts one long-lived Codex process and submits each transcript as
-terminal input.
+This command is reserved for the default voice mode. Until `VoiceLoop` exists,
+the currently working development path is:
+
+```bash
+uv run agent-voice codex --text
+```
+
+The text-mode adapter starts one long-lived Codex process and submits each
+typed command as terminal input.
 
 ### Pi
 
 Pi can currently be connected through the same pexpect fallback:
 
 ```bash
-uv run agent-voice codex --agent-command pi
-uv run agent-voice codex --agent-command "pi -c"
+uv run agent-voice codex --text --agent-command pi
+uv run agent-voice codex --text --agent-command "pi -c"
 ```
 
 The stable target should be a dedicated Pi adapter:

@@ -35,8 +35,9 @@ be attached later without changing agent control semantics.
 - [x] Test that `PexpectAgent.submit()` sends text and `\r`.
 - [x] Test that `VoicePresenter` summarizes modified files and passing tests.
 - [x] Test that interrupts only trigger while speaking.
-- [x] Test that CLI `codex --once` submits a command and prints a summary.
-- [x] Test that CLI `codex` keeps one agent session for multiple commands.
+- [x] Test that CLI `codex --text --once` submits a command and prints a summary.
+- [x] Test that CLI `codex --text` keeps one agent session for multiple commands.
+- [x] Test that CLI `codex` is reserved for voice mode.
 
 ### Task 3: Core Implementation
 
@@ -49,8 +50,9 @@ be attached later without changing agent control semantics.
 - [x] Implement `PexpectAgent`.
 - [x] Implement `VoicePresenter`.
 - [x] Implement `InterruptManager` and `VoiceSession`.
-- [x] Implement `agent-voice codex --once`.
-- [x] Implement `agent-voice codex` as the persistent default loop.
+- [x] Implement `agent-voice codex --text --once`.
+- [x] Implement `agent-voice codex --text` as the persistent text loop.
+- [x] Reserve `agent-voice codex` as the default voice-mode entrypoint.
 - [x] Collect agent output until idle instead of reading once.
 
 ### Task 4: Verification

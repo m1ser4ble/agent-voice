@@ -57,8 +57,9 @@ Implemented:
 - Korean/English rule-based speech summaries
 - session state machine
 - interrupt phrase detection
-- `agent-voice codex` persistent text session
-- `agent-voice codex --once` for smoke tests and automation
+- `agent-voice codex` reserved as the default voice-mode entrypoint
+- `agent-voice codex --text` persistent text session
+- `agent-voice codex --text --once` for smoke tests and automation
 - test coverage for all current modules
 
 Not implemented yet:
@@ -86,7 +87,7 @@ Verified stack:
   `Authentication bug fixed. One test passed.`
 - Pipecat Smart Turn v3.2 CPU ONNX returned `EndOfTurnState.COMPLETE`.
 - Observed Smart Turn probability: `0.947`.
-- Observed Smart Turn latency: about `46-48ms` in the project venv.
+- Observed Smart Turn latency: tens of milliseconds in the project venv.
 
 This is provider-level smoke, not full product E2E. The repo still needs
 `TranscriptSource`, `Speaker`, and `VoiceLoop` components before mic-to-agent
@@ -100,11 +101,18 @@ Codex is the current first-class path:
 uv run agent-voice codex
 ```
 
+This is now the voice-mode entrypoint. It currently reports that the voice loop
+is not implemented yet. Use text mode for the currently working path:
+
+```bash
+uv run agent-voice codex --text
+```
+
 The current Pi fallback is:
 
 ```bash
-uv run agent-voice codex --agent-command pi
-uv run agent-voice codex --agent-command "pi -c"
+uv run agent-voice codex --text --agent-command pi
+uv run agent-voice codex --text --agent-command "pi -c"
 ```
 
 This works because the existing `PexpectAgent` can spawn any terminal command

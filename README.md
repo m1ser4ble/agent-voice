@@ -33,8 +33,8 @@ This repo currently contains the Codex MVP core:
 - `VoicePresenter`: turns noisy agent output into short speech summaries
 - `InterruptManager`: detects stop phrases while the system is speaking
 - `VoiceSession`: tracks `LISTENING -> THINKING -> SPEAKING -> INTERRUPTED`
-- `agent-voice codex`: starts one persistent Codex session and keeps sending
-  commands to that same process
+- `agent-voice codex --text`: starts one persistent Codex session and keeps
+  sending keyboard text commands to that same process
 
 Audio capture, Smart Turn, Whisper, and Kokoro are intentionally next-step
 modules. The first commit keeps the hard agent boundary stable before adding
@@ -48,16 +48,25 @@ uv sync
 
 ## Run
 
-Start a persistent Codex session:
+Voice mode entrypoint:
 
 ```bash
 uv run agent-voice codex
 ```
 
-Use a different Codex command:
+Full voice mode is the intended default for this command, but the voice loop is
+not implemented yet. The command currently exits with guidance to use `--text`.
+
+Start the current persistent text-mode Codex session:
 
 ```bash
-uv run agent-voice codex --agent-command "codex --model gpt-5"
+uv run agent-voice codex --text
+```
+
+Use a different Codex command in text mode:
+
+```bash
+uv run agent-voice codex --text --agent-command "codex --model gpt-5"
 ```
 
 ### Connect to Pi
@@ -66,13 +75,13 @@ uv run agent-voice codex --agent-command "codex --model gpt-5"
 fallback is to reuse the pexpect adapter and point it at the Pi CLI:
 
 ```bash
-uv run agent-voice codex --agent-command pi
+uv run agent-voice codex --text --agent-command pi
 ```
 
 To continue the most recent Pi session, pass Pi's own session flag:
 
 ```bash
-uv run agent-voice codex --agent-command "pi -c"
+uv run agent-voice codex --text --agent-command "pi -c"
 ```
 
 This keeps one long-lived `pi` process running and sends each transcript as
@@ -92,7 +101,7 @@ now?" state answers.
 Send one command for smoke tests or automation:
 
 ```bash
-uv run agent-voice codex --once "auth 버그 고쳐"
+uv run agent-voice codex --text --once "auth 버그 고쳐"
 ```
 
 ## Why This Exists
