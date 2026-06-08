@@ -13,10 +13,23 @@ class FakeTranscriptSource:
         return self.transcripts.pop(0)
 
 
+class PollingTranscriptSource:
+    def __init__(self, transcripts):
+        self.transcripts = list(transcripts)
+        self.polls = 0
+
+    def next_transcript(self):
+        self.polls += 1
+        if not self.transcripts:
+            return None
+        return self.transcripts.pop(0)
+
+
 class FakeAgent:
     def __init__(self, output):
         self.outputs = output if isinstance(output, list) else [output]
         self.submitted = []
+        self.stops = 0
 
     def start(self):
         return None
@@ -30,6 +43,7 @@ class FakeAgent:
         return self.outputs.pop(0)
 
     def stop(self):
+        self.stops += 1
         return None
 
 
@@ -121,6 +135,76 @@ def test_voice_loop_runs_until_transcript_source_is_idle():
         "테스트 2개는 모두 통과했습니다.",
     ]
     assert session.state is SessionState.LISTENING
+
+
+def test_voice_loop_exit_command_stops_runtime_without_sending_to_agent():
+    source = FakeTranscriptSource(["auth 버그 고쳐", "이제 그만", "테스트는?"])
+    agent = FakeAgent(
+        [
+            "Modified:\n- auth.py\n\nTests:\n1 passed\n",
+            "Tests:\n2 passed\n",
+        ]
+    )
+    speaker = FakeSpeaker()
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        collect_output=lambda agent: agent.read_available(),
+    )
+
+    handled_count = loop.run_until_idle()
+
+    assert handled_count == 2
+    assert loop.should_exit is True
+    assert agent.submitted == ["auth 버그 고쳐"]
+    assert agent.stops == 1
+    assert speaker.stops == 1
+    assert speaker.said == [
+        "파일 1개를 수정했고, 테스트 1개는 모두 통과했습니다.",
+    ]
+
+
+def test_voice_loop_forever_keeps_polling_when_user_is_silent():
+    source = PollingTranscriptSource([None, None, "auth 버그 고쳐", None])
+    agent = FakeAgent("Modified:\n- auth.py\n\nTests:\n1 passed\n")
+    speaker = FakeSpeaker()
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        collect_output=lambda agent: agent.read_available(),
+    )
+
+    handled_count = loop.run_forever(max_polls=4, idle_sleep_seconds=0)
+
+    assert handled_count == 1
+    assert source.polls == 4
+    assert agent.submitted == ["auth 버그 고쳐"]
+    assert speaker.said == ["파일 1개를 수정했고, 테스트 1개는 모두 통과했습니다."]
+
+
+def test_voice_loop_forever_exits_only_on_exit_intent_not_idle():
+    source = PollingTranscriptSource([None, None, "종료", "auth 버그 고쳐"])
+    agent = FakeAgent("Tests:\n1 passed\n")
+    speaker = FakeSpeaker()
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        collect_output=lambda agent: agent.read_available(),
+    )
+
+    handled_count = loop.run_forever(max_polls=10, idle_sleep_seconds=0)
+
+    assert handled_count == 1
+    assert source.polls == 3
+    assert loop.should_exit is True
+    assert agent.submitted == []
+    assert agent.stops == 1
 
 
 def test_voice_loop_stops_speaker_when_interrupt_arrives_while_speaking():

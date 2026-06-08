@@ -241,8 +241,10 @@ Current files:
 ## Voice Loop Contract
 
 `VoiceLoop` is now a test-backed synchronous component. It supports one-turn
-processing with `run_once()` and bounded continuous processing with
-`run_until_idle()`. The next step is wiring real transcript and speaker
+processing with `run_once()`, batch draining with `run_until_idle()`, and runtime
+polling with `run_forever()`. Silence or no transcript is not an exit condition;
+the runtime keeps listening until an explicit exit intent such as `이제 그만`,
+`종료`, `exit`, or `quit`. The next step is wiring real transcript and speaker
 providers into it.
 
 Kokoro is already the intended TTS engine. The missing piece is the local
@@ -265,6 +267,12 @@ class Speaker(Protocol):
 class VoiceLoop:
     def run_once(self) -> bool: ...
     def run_until_idle(self, *, max_turns: int | None = None) -> int: ...
+    def run_forever(
+        self,
+        *,
+        max_polls: int | None = None,
+        idle_sleep_seconds: float = 0.05,
+    ) -> int: ...
 ```
 
 The loop should own this decision:
@@ -349,8 +357,10 @@ Default interrupt semantics:
 
 - `잠깐`, `멈춰`, `stop`, or `pause` stops speech playback only.
 - It should not cancel the coding agent by default.
-- Future commands such as "그만해" or "cancel" can map to agent-level interrupt
-  behavior like Ctrl-C.
+- `이제 그만`, `종료`, `exit`, or `quit` exits the voice runtime and stops the
+  agent process.
+- Future commands such as "cancel" can map to agent-level interrupt behavior
+  like Ctrl-C.
 
 ## Testing Boundaries
 
