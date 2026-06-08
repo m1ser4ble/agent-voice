@@ -28,6 +28,8 @@ This is not primarily STT or TTS. The important product surface is:
 
 ## Architecture
 
+Detailed component architecture: `docs/architecture.md`
+
 ```text
 Mic
   -> Smart Turn
