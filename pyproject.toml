@@ -1,0 +1,32 @@
+[project]
+name = "agent-voice"
+version = "0.1.0"
+description = "Local-first voice layer for terminal coding agents."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [
+  { name = "m1ser4ble" }
+]
+dependencies = [
+  "pexpect>=4.9.0"
+]
+
+[project.scripts]
+agent-voice = "agent_voice.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4.0"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_voice"]
