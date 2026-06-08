@@ -115,6 +115,86 @@ These commands are not implemented yet. They describe the product boundary:
 `agent-voice` should assemble the local voice stack, not merely expose a set of
 Python classes.
 
+## Replaceable Provider Design
+
+Adapter pattern is the right starting point, but it should be applied as small
+provider protocols instead of one large "voice provider" interface. Each
+external component should sit behind the narrowest contract the voice loop
+needs.
+
+Provider protocols should be stable:
+
+```python
+class TurnDetector(Protocol):
+    def accept_audio(self, chunk: AudioChunk) -> TurnDecision: ...
+
+
+class Transcriber(Protocol):
+    def transcribe(self, audio: AudioSegment) -> Transcript: ...
+
+
+class Speaker(Protocol):
+    def say(self, text: str) -> None: ...
+    def stop(self) -> None: ...
+
+
+class AgentAdapter(Protocol):
+    def start(self) -> None: ...
+    def submit(self, text: str) -> None: ...
+    def read_available(self) -> str: ...
+    def stop(self) -> None: ...
+```
+
+Concrete providers can then change without rewriting the voice loop:
+
+| Boundary | Default Candidate | Replaceable With |
+| --- | --- | --- |
+| Turn detection | Pipecat Smart Turn / VAD | Silero VAD, WebRTC VAD, custom semantic turn detector |
+| Transcription | Whisper | faster-whisper, whisper.cpp, platform STT |
+| Speech | Kokoro | Piper, Coqui, system TTS, hosted TTS if explicitly configured |
+| Agent control | `PexpectAgent` | Pi RPC adapter, Claude structured adapter, tmux adapter |
+| Presentation | `VoicePresenter` | rule-based presenter, LLM-backed presenter, agent-specific presenter |
+
+Provider selection should happen outside `VoiceLoop`. The loop should receive
+already-constructed components:
+
+```python
+profile = ConfigProfile.load("local-cpu")
+providers = ProviderRegistry(profile).build()
+loop = VoiceLoop(
+    transcript_source=providers.transcript_source,
+    agent=providers.agent,
+    presenter=providers.presenter,
+    speaker=providers.speaker,
+    interrupt=providers.interrupt,
+)
+```
+
+This keeps the core loop independent from Kokoro, Whisper, Pipecat, Codex, Pi,
+and Claude Code implementation details.
+
+Provider metadata should include:
+
+- `name`: human-readable provider name
+- `kind`: `turn_detector`, `transcriber`, `speaker`, `agent`, or `presenter`
+- `capabilities`: streaming, local-only, GPU support, interruption support,
+  structured events, languages
+- `health_check`: fast validation command or function
+- `setup_hint`: actionable installation/configuration guidance
+
+Compatibility rules:
+
+- A provider can be replaced if it satisfies the same protocol.
+- Optional provider-specific features must be exposed as capabilities, not
+  hardcoded type checks.
+- `VoiceLoop` must depend on protocols, not concrete provider classes.
+- Provider setup can know about external tools and model files. Core runtime
+  components should not own installation or download logic.
+
+Current code already applies this idea to agents through the `Agent` protocol
+and `PexpectAgent`. The same pattern still needs to be added for turn
+detection, transcription, speech, provider setup, and health checks.
+
 ## Current MVP Component Map
 
 The current implementation is the non-audio MVP:
