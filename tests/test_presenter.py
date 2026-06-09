@@ -108,3 +108,15 @@ def test_presenter_returns_empty_when_output_is_only_progress_spinner():
     summary = VoicePresenter(language="ko").summarize(output, prompt="뭐해?")
 
     assert summary == ""
+
+
+def test_presenter_returns_empty_when_working_spinner_leaves_separator_line():
+    output = """
+⠧ Working...────────────────────────────────────────────────────
+~/Workspace/agent-voice (main)
+↑1.0k ↓6 $0.005 (sub) 0.4%/272k (auto)           (openai-codex) gpt-5.5 • medium
+"""
+
+    summary = VoicePresenter(language="ko").summarize(output, prompt="하나 둘 셋!")
+
+    assert summary == ""

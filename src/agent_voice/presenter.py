@@ -128,8 +128,13 @@ class VoicePresenter:
                 continue
 
             cleaned_line = self._clean_speech_text(stripped)
-            if cleaned_line:
-                current_block.append(cleaned_line)
+            if not cleaned_line:
+                continue
+            if self._is_ignored_fallback_line(cleaned_line, normalized_prompt):
+                self._append_block(blocks, current_block)
+                current_block = []
+                continue
+            current_block.append(cleaned_line)
 
         self._append_block(blocks, current_block)
 
@@ -137,6 +142,8 @@ class VoicePresenter:
         for block in candidate_blocks:
             summary = self._clean_speech_text(" ".join(block))
             summary = self._dedupe_streaming_repeat(summary)
+            if self._is_ignored_fallback_line(summary, normalized_prompt):
+                continue
             if summary:
                 return summary[:220]
         return ""
