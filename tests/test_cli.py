@@ -173,6 +173,23 @@ def test_cli_voice_mode_accepts_audio_device_selection():
     assert captured_devices == [("2", "USB Speaker")]
 
 
+def test_cli_voice_mode_accepts_keyboard_and_transparency_controls():
+    voice_loop = FakeVoiceLoop()
+    captured_flags = []
+
+    exit_code = main(
+        ["--no-keyboard", "--quiet-agent-io", "codex"],
+        voice_loop_factory=lambda _, args: (
+            captured_flags.append((args.no_keyboard, args.quiet_agent_io))
+            or voice_loop
+        ),
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert captured_flags == [(True, True)]
+
+
 def test_audio_device_parser_accepts_index_or_name():
     assert _parse_audio_device("2") == 2
     assert _parse_audio_device("USB Microphone") == "USB Microphone"

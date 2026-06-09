@@ -15,6 +15,7 @@ platform audio.
 flowchart LR
     subgraph Input
         Mic[Mic]
+        Keyboard[Keyboard Line Input]
         TurnDetector[Smart Turn / VAD]
         Transcriber[Whisper Transcriber]
         TranscriptSource[Transcript Source]
@@ -51,6 +52,7 @@ flowchart LR
     Setup --> Adapter
     Setup --> Health
     Mic --> TurnDetector --> Transcriber --> TranscriptSource
+    Keyboard --> TranscriptSource
     TranscriptSource --> VoiceLoop
     VoiceLoop --> Session
     VoiceLoop --> Interrupt
@@ -71,10 +73,11 @@ flowchart LR
 
 | Component | Responsibility | Current Status |
 | --- | --- | --- |
-| `TranscriptSource` | Supplies completed user utterances from text, Whisper, or another input provider. | Protocol implemented in `loop.py`; `MicrophoneWhisperTranscriptSource` implemented in `providers.py` with mic capture, simple energy VAD, Smart Turn, and faster-whisper. Real-device tuning still needed. |
-| `VoiceLoop` | Coordinates transcript handling, agent submission, output collection, presentation, speaking, and interruption. | Implemented as a test-backed runtime loop and wired to the default CLI voice path. Speech playback runs in the background while the loop polls for interrupt transcripts. |
+| `TranscriptSource` | Supplies completed user utterances from text, Whisper, keyboard input, or another input provider. | Protocol implemented in `loop.py`; `MicrophoneWhisperTranscriptSource`, `KeyboardTranscriptSource`, and `MergedTranscriptSource` implemented in `providers.py`. Real-device tuning still needed. |
+| `VoiceLoop` | Coordinates transcript handling, agent submission, output collection, presentation, speaking, terminal visibility events, and interruption. | Implemented as a test-backed runtime loop and wired to the default CLI voice path. Speech playback runs in the background while the loop polls for interrupt transcripts. |
 | `AgentAdapter` | Starts a coding agent, sends user input, and reads available agent output. | Implemented as `PexpectAgent`; Codex and Pi both use opaque target-argument passthrough. |
 | `VoicePresenter` | Converts raw agent output into short speech-ready summaries. | Implemented as rule-based summaries. |
+| `VoiceLoopObserver` | Emits transparent runtime events such as transcript, agent input, raw agent output, and speech summary. | Implemented in `loop.py` as an event callback contract; `TerminalVoiceObserver` renders it in the default provider. |
 | `Speaker` | Speaks presenter output and supports `stop()` for barge-in. Kokoro is the intended default TTS backend. | Protocol implemented in `loop.py`; `KokoroSpeaker` implemented in `providers.py` using Kokoro ONNX plus `sounddevice`. Real-device tuning still needed. |
 | `VoicePresetConfig` | Resolves named TTS presets into provider settings such as voice, language/accent, and speech speed. | Implemented through bundled `voice_presets.toml`, optional `--voice-config`, `--voice-preset`, and explicit `--tts-*` CLI overrides. |
 | `InterruptManager` | Decides whether a transcript should interrupt speech in the current state. | Implemented and wired into `VoiceLoop` and default CLI voice runtime. |
@@ -224,16 +227,23 @@ The current default runtime is the local voice MVP:
 ```mermaid
 flowchart LR
     Mic[Microphone]
-    Source[MicrophoneWhisperTranscriptSource]
+    Keyboard[Keyboard line input]
+    MicSource[MicrophoneWhisperTranscriptSource]
+    KeyboardSource[KeyboardTranscriptSource]
+    Source[MergedTranscriptSource]
     Loop[VoiceLoop]
+    Observer[TerminalVoiceObserver]
     Adapter[PexpectAgent]
     Agent[Codex or Pi target command]
     Presenter[VoicePresenter]
     Speaker[KokoroSpeaker]
     Session[VoiceSession]
 
-    Mic --> Source --> Loop
+    Mic --> MicSource --> Source
+    Keyboard --> KeyboardSource --> Source
+    Source --> Loop
     Loop --> Session
+    Loop -. transcript / input / raw output / summary .-> Observer
     Loop --> Adapter
     Adapter --> Agent
     Agent --> Adapter
@@ -288,21 +298,32 @@ thread and continues polling `TranscriptSource` while the session is
 loop calls `speaker.stop()`, transitions through `INTERRUPTED`, and resumes
 `LISTENING`.
 
-Non-interrupt transcripts observed while `SPEAKING` are ignored for now. That
-is intentional: without echo cancellation and stronger intent detection, queuing
-ordinary speech during TTS can feed the system's own spoken summary back into
-the coding agent as a new command.
+Non-interrupt microphone transcripts observed while `SPEAKING` are ignored for
+now. That is intentional: without echo cancellation and stronger intent
+detection, queuing ordinary speech during TTS can feed the system's own spoken
+summary back into the coding agent as a new command. Keyboard transcripts are
+different because they cannot be TTS echo; those are queued and submitted on the
+next turn after speech finishes.
 
 The current provider implementation wires `MicrophoneWhisperTranscriptSource`
-and `KokoroSpeaker` into the default CLI voice path. The next step is real
-hardware E2E tuning: mic thresholds, echo behavior, Kokoro language/voice
-quality, latency, and clearer doctor checks.
+and `KeyboardTranscriptSource` through `MergedTranscriptSource`, then connects
+that source and `KokoroSpeaker` into the default CLI voice path. The terminal
+observer prints completed transcripts, exact agent input, raw agent output, and
+the speech summary so the wrapper does not hide the underlying Codex/Pi
+session. The next step is real hardware E2E tuning: mic thresholds, echo
+behavior, Kokoro language/voice quality, latency, and clearer doctor checks.
 
 Current shape:
 
 ```python
 class TranscriptSource(Protocol):
-    def next_transcript(self) -> str | None: ...
+    def next_transcript(self) -> TranscriptInput | None: ...
+
+
+@dataclass(frozen=True)
+class Transcript:
+    text: str
+    source: str = "unknown"
 
 
 class Speaker(Protocol):
@@ -320,6 +341,16 @@ class VoiceLoop:
         idle_sleep_seconds: float = 0.05,
     ) -> int: ...
 ```
+
+Voice mode accepts two input paths by default:
+
+- microphone audio: Smart Turn/VAD -> faster-whisper -> `Transcript(source="microphone")`
+- terminal typing: line + Enter -> `Transcript(source="keyboard")`
+
+Both paths enter the same `VoiceLoop`. If a typed command arrives while TTS is
+speaking, it is queued for the next turn. Non-interrupt microphone transcripts
+during speech are still ignored to avoid echoing the spoken summary back into
+the agent.
 
 The loop should own this decision:
 
@@ -442,7 +473,8 @@ Current transition triggers:
 | `SPEAKING` | `INTERRUPTED` | Stop phrase such as `잠깐`, `멈춰`, `stop`, or `pause` | `_handle_speaking_transcript()` -> `speaker.stop()` -> `session.interrupt()` | Only valid while speaking. The default behavior stops TTS, not the coding agent. |
 | `INTERRUPTED` | `LISTENING` | Interrupt handling completes | `_handle_speaking_transcript()` -> `session.resume_listening()` | This transition is immediate in the current loop. |
 | `SPEAKING` | `INTERRUPTED` -> `LISTENING` plus runtime stopped | Exit phrase during speech | `_handle_speaking_transcript()` -> `_should_exit()` | Stops speaker and agent, sets `should_exit=True`, then resumes listening state before the runtime loop exits. |
-| `SPEAKING` | `SPEAKING` | Non-interrupt transcript during playback | `_handle_speaking_transcript()` | Ignored to avoid echoing spoken summaries back into the agent as new commands. |
+| `SPEAKING` | `SPEAKING` | Non-interrupt keyboard transcript during playback | `_handle_speaking_transcript()` | Queued in `VoiceLoop` and submitted on the next turn after TTS finishes. |
+| `SPEAKING` | `SPEAKING` | Non-interrupt microphone/unknown transcript during playback | `_handle_speaking_transcript()` | Ignored to avoid echoing spoken summaries back into the agent as new commands. |
 
 The important split is:
 

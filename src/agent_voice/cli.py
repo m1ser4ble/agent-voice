@@ -160,6 +160,7 @@ def _run_voice_target(
         return 2
 
     factory = voice_loop_factory or _build_default_voice_loop
+    args._agent_voice_output = output
     try:
         loop = factory(command, args)
     except VoiceModeUnavailableError as error:
@@ -194,6 +195,9 @@ def _build_default_voice_loop(
             vad_threshold=args.vad_threshold,
             input_device=_parse_audio_device(args.input_device),
             output_device=_parse_audio_device(args.output_device),
+            keyboard_input=not args.no_keyboard,
+            terminal_output=getattr(args, "_agent_voice_output", sys.stdout),
+            transparent_io=not args.quiet_agent_io,
         )
     except (ImportError, ModuleNotFoundError) as error:
         raise VoiceModeUnavailableError(
@@ -393,6 +397,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output-device",
         default=None,
         help="sounddevice output device index or name for speaker playback.",
+    )
+    parser.add_argument(
+        "--no-keyboard",
+        action="store_true",
+        help="Disable typed line input while voice mode is running.",
+    )
+    parser.add_argument(
+        "--quiet-agent-io",
+        action="store_true",
+        help="Do not print transcript, agent input/output, and summary events.",
     )
 
     parser.add_argument(

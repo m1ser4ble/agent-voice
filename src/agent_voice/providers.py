@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any, Protocol, TextIO
 
 from agent_voice.adapter import Agent, PexpectAgent
-from agent_voice.loop import CollectOutput, VoiceLoop
+from agent_voice.loop import CollectOutput, Transcript, TranscriptInput, VoiceLoop
+from agent_voice.loop import VoiceLoopEvent
 from agent_voice.presenter import VoicePresenter
 
 
@@ -78,6 +79,56 @@ class NullDownloadReporter:
 
     def download_complete(self, path: Path, size: int) -> None:
         return None
+
+
+class TerminalVoiceObserver:
+    def __init__(self, output: TextIO | None = None) -> None:
+        self.output = output
+
+    def __call__(self, event: VoiceLoopEvent) -> None:
+        output = self.output or sys.stdout
+
+        if event.kind == "transcript":
+            print(
+                f"[{_format_transcript_source(event.source)}] {event.text}",
+                file=output,
+                flush=True,
+            )
+            return
+
+        if event.kind == "agent_input":
+            print(f"[agent input] {event.text}", file=output, flush=True)
+            return
+
+        if event.kind == "agent_output":
+            text = event.text.rstrip()
+            if text:
+                print("[agent output]", file=output, flush=True)
+                print(text, file=output, flush=True)
+            return
+
+        if event.kind == "speech_summary":
+            print(f"[voice summary] {event.text}", file=output, flush=True)
+            return
+
+        if event.kind == "interrupt":
+            print(f"[interrupt] {event.text}", file=output, flush=True)
+            return
+
+        if event.kind == "exit":
+            print(f"[exit] {event.text}", file=output, flush=True)
+            return
+
+        if event.kind == "queued_transcript":
+            print(f"[queued typed input] {event.text}", file=output, flush=True)
+            return
+
+        if event.kind == "ignored_transcript":
+            print(
+                f"[ignored while speaking] {event.text}",
+                file=output,
+                flush=True,
+            )
 
 
 class StderrDownloadReporter:
@@ -202,9 +253,13 @@ class ManagedVoiceLoop:
     loop: VoiceLoop
     agent: Agent
     closeables: Sequence[Closeable] = ()
+    status_lines: Sequence[str] = ()
+    output: TextIO | None = None
 
     def run_forever(self) -> int:
         try:
+            for line in self.status_lines:
+                print(line, file=self.output or sys.stdout, flush=True)
             self.agent.start()
             return self.loop.run_forever()
         finally:
@@ -260,9 +315,12 @@ class MicrophoneWhisperTranscriptSource:
         self._stream.start()
         self._worker.start()
 
-    def next_transcript(self) -> str | None:
+    def next_transcript(self) -> Transcript | None:
         try:
-            return self._transcripts.get_nowait()
+            return Transcript(
+                text=self._transcripts.get_nowait(),
+                source="microphone",
+            )
         except queue.Empty:
             return None
 
@@ -360,6 +418,52 @@ class MicrophoneWhisperTranscriptSource:
             return True
 
 
+class KeyboardTranscriptSource:
+    def __init__(self, input_stream: TextIO | None = None) -> None:
+        self._input_stream = input_stream or sys.stdin
+        self._transcripts: queue.Queue[Transcript] = queue.Queue()
+        self._stop = threading.Event()
+        self._worker = threading.Thread(target=self._run, daemon=True)
+        self._worker.start()
+
+    def next_transcript(self) -> Transcript | None:
+        try:
+            return self._transcripts.get_nowait()
+        except queue.Empty:
+            return None
+
+    def close(self) -> None:
+        self._stop.set()
+        self._worker.join(timeout=0.1)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            line = self._input_stream.readline()
+            if line == "":
+                return
+            text = line.strip()
+            if text:
+                self._transcripts.put(Transcript(text=text, source="keyboard"))
+
+
+class MergedTranscriptSource:
+    def __init__(self, sources: Sequence[Any]) -> None:
+        self._sources = tuple(sources)
+
+    def next_transcript(self) -> TranscriptInput | None:
+        for source in self._sources:
+            transcript = source.next_transcript()
+            if transcript is not None:
+                return transcript
+        return None
+
+    def close(self) -> None:
+        for source in self._sources:
+            close = getattr(source, "close", None)
+            if close is not None:
+                close()
+
+
 def build_local_voice_loop(
     *,
     command: tuple[str, ...],
@@ -375,15 +479,27 @@ def build_local_voice_loop(
     vad_threshold: float = 0.01,
     input_device: int | str | None = None,
     output_device: int | str | None = None,
+    keyboard_input: bool = True,
+    keyboard_input_stream: TextIO | None = None,
+    terminal_output: TextIO | None = None,
+    transparent_io: bool = True,
 ) -> ManagedVoiceLoop:
     agent = PexpectAgent(command=command)
-    transcript_source = MicrophoneWhisperTranscriptSource(
+    microphone_source = MicrophoneWhisperTranscriptSource(
         sample_rate=sample_rate,
         vad_threshold=vad_threshold,
         whisper_model=whisper_model,
         whisper_language=whisper_language,
         input_device=input_device,
     )
+    sources: list[Any] = [microphone_source]
+    keyboard_source = _build_keyboard_source(
+        enabled=keyboard_input,
+        input_stream=keyboard_input_stream,
+    )
+    if keyboard_source is not None:
+        sources.insert(0, keyboard_source)
+    transcript_source = MergedTranscriptSource(sources)
     try:
         speaker = KokoroSpeaker.from_cache(
             cache_dir=cache_dir / "kokoro",
@@ -401,8 +517,73 @@ def build_local_voice_loop(
         presenter=VoicePresenter(language=language),
         speaker=speaker,
         collect_output=collect_output,
+        observer=(
+            TerminalVoiceObserver(terminal_output) if transparent_io else None
+        ),
     )
-    return ManagedVoiceLoop(loop=loop, agent=agent, closeables=(transcript_source,))
+    status_lines = _build_status_lines(
+        command=command,
+        keyboard_enabled=keyboard_source is not None,
+        language=language,
+        whisper_language=whisper_language,
+    )
+    return ManagedVoiceLoop(
+        loop=loop,
+        agent=agent,
+        closeables=(transcript_source,),
+        status_lines=status_lines if transparent_io else (),
+        output=terminal_output,
+    )
+
+
+def _build_keyboard_source(
+    *,
+    enabled: bool,
+    input_stream: TextIO | None = None,
+) -> KeyboardTranscriptSource | None:
+    if not enabled:
+        return None
+
+    stream = input_stream or sys.stdin
+    if input_stream is None and not _is_interactive_stream(stream):
+        return None
+    return KeyboardTranscriptSource(input_stream=stream)
+
+
+def _is_interactive_stream(stream: TextIO) -> bool:
+    isatty = getattr(stream, "isatty", None)
+    return bool(isatty is not None and isatty())
+
+
+def _build_status_lines(
+    *,
+    command: tuple[str, ...],
+    keyboard_enabled: bool,
+    language: str,
+    whisper_language: str | None,
+) -> tuple[str, ...]:
+    lines = [
+        f"agent-voice session started: {' '.join(command)}",
+        f"summary language: {language}; stt language: {whisper_language or 'auto'}",
+    ]
+    if keyboard_enabled:
+        lines.append(
+            "Speak commands, or type a line and press Enter. "
+            "Say/type '종료' or 'exit' to quit."
+        )
+    else:
+        lines.append("Speak commands. Say '종료' or 'exit' to quit.")
+    return tuple(lines)
+
+
+def _format_transcript_source(source: str) -> str:
+    if source == "microphone":
+        return "voice transcript"
+    if source == "keyboard":
+        return "typed input"
+    if source == "text":
+        return "text input"
+    return "transcript"
 
 
 def _download_if_missing(

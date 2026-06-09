@@ -1,7 +1,7 @@
 import threading
 
 from agent_voice.interrupt import InterruptManager, SessionState, VoiceSession
-from agent_voice.loop import VoiceLoop
+from agent_voice.loop import Transcript, VoiceLoop
 from agent_voice.presenter import VoicePresenter
 
 
@@ -79,6 +79,14 @@ class FakeSpeaker:
         self.stops += 1
 
 
+class FakeObserver:
+    def __init__(self):
+        self.events = []
+
+    def __call__(self, event):
+        self.events.append(event)
+
+
 class BlockingSpeaker:
     def __init__(self, *, timeout=0.1):
         self.said = []
@@ -123,6 +131,35 @@ def test_voice_loop_sends_transcript_to_agent_and_speaks_presented_summary():
         SessionState.THINKING,
         SessionState.SPEAKING,
         SessionState.LISTENING,
+    ]
+
+
+def test_voice_loop_emits_transparent_agent_io_events():
+    source = FakeTranscriptSource([Transcript("auth 버그 고쳐", source="microphone")])
+    agent = FakeAgent("Modified:\n- auth.py\n\nTests:\n1 passed\n")
+    speaker = FakeSpeaker()
+    observer = FakeObserver()
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        collect_output=lambda agent: agent.read_available(),
+        observer=observer,
+    )
+
+    handled = loop.run_once()
+
+    assert handled is True
+    assert [(event.kind, event.text, event.source) for event in observer.events] == [
+        ("transcript", "auth 버그 고쳐", "microphone"),
+        ("agent_input", "auth 버그 고쳐", "microphone"),
+        ("agent_output", "Modified:\n- auth.py\n\nTests:\n1 passed\n", "unknown"),
+        (
+            "speech_summary",
+            "파일 1개를 수정했고, 테스트 1개는 모두 통과했습니다.",
+            "unknown",
+        ),
     ]
 
 
@@ -339,3 +376,39 @@ def test_voice_loop_ignores_non_interrupt_transcripts_while_speaking():
     assert first_handled is True
     assert second_handled is False
     assert agent.submitted == ["auth 버그 고쳐"]
+
+
+def test_voice_loop_queues_keyboard_transcripts_that_arrive_while_speaking():
+    speaker = BlockingSpeaker(timeout=0.01)
+    source = InterruptDuringSpeechSource(
+        first_transcript="auth 버그 고쳐",
+        interrupt_transcript=Transcript("테스트는?", source="keyboard"),
+        speaking_started=speaker.started,
+    )
+    agent = FakeAgent(
+        [
+            "Modified:\n- auth.py\n\nTests:\n1 passed\n",
+            "Tests:\n2 passed\n",
+        ]
+    )
+    observer = FakeObserver()
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        collect_output=lambda agent: agent.read_available(),
+        observer=observer,
+    )
+
+    first_handled = loop.run_once()
+    second_handled = loop.run_once()
+
+    assert first_handled is True
+    assert second_handled is True
+    assert agent.submitted == ["auth 버그 고쳐", "테스트는?"]
+    assert speaker.said == [
+        "파일 1개를 수정했고, 테스트 1개는 모두 통과했습니다.",
+        "테스트 2개는 모두 통과했습니다.",
+    ]
+    assert any(event.kind == "queued_transcript" for event in observer.events)

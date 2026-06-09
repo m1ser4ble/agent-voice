@@ -37,6 +37,10 @@ This repo currently contains the local voice MVP core:
   contracts
 - `MicrophoneWhisperTranscriptSource`: captures mic audio, segments speech with
   a simple energy gate plus Smart Turn, and transcribes with faster-whisper
+- `KeyboardTranscriptSource`: lets you type a line and press Enter while voice
+  mode is still running
+- terminal I/O visibility: prints completed transcripts, submitted agent input,
+  raw agent output, and spoken summaries during voice mode
 - `KokoroSpeaker`: synthesizes presenter output with Kokoro ONNX and plays it
   through the local speaker
 - `agent-voice codex ...`: starts voice mode by default and passes all target
@@ -74,6 +78,12 @@ Voice mode entrypoint:
 uv run agent-voice codex
 ```
 
+Voice mode keeps the terminal transparent. You can speak commands through the
+mic, or type a line and press Enter in the same session. The terminal prints the
+completed transcript, the exact input submitted to Codex/Pi, the raw agent
+output collected from the child process, and the shorter voice summary. Say or
+type `종료` / `exit` to stop the session.
+
 The default Kokoro voice preset is `jarvis_style`. This is a stock Kokoro
 assistant-style preset, not a celebrity or movie-character voice clone.
 
@@ -93,6 +103,11 @@ uv run agent-voice --language ko --whisper-model tiny --stt-language ko codex
 uv run agent-voice --voice-preset high_quality codex
 uv run agent-voice --tts-voice af_sarah --tts-speed 1.0 codex --model <model>
 ```
+
+`--language ko` controls the speech summary language and is the default.
+`--stt-language ko` tells Whisper to bias transcription toward Korean input.
+Use `--quiet-agent-io` to hide terminal transcript/raw-output events, or
+`--no-keyboard` if you want mic-only input.
 
 By default, `agent-voice` uses the OS/sounddevice default input and output
 devices. Select a specific microphone or speaker by sounddevice index or name

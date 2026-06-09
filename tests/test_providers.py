@@ -1,8 +1,13 @@
+import time
+from io import StringIO
+
 import pytest
 
 from agent_voice.providers import (
+    KeyboardTranscriptSource,
     KokoroSpeaker,
     ManagedVoiceLoop,
+    MergedTranscriptSource,
     MicrophoneWhisperTranscriptSource,
     StderrDownloadReporter,
     _download_if_missing,
@@ -65,6 +70,20 @@ class FakeCloseable:
         self.closes += 1
 
 
+class FakeTranscriptSource:
+    def __init__(self, transcripts):
+        self.transcripts = list(transcripts)
+        self.closes = 0
+
+    def next_transcript(self):
+        if not self.transcripts:
+            return None
+        return self.transcripts.pop(0)
+
+    def close(self):
+        self.closes += 1
+
+
 def test_kokoro_speaker_synthesizes_and_plays_audio():
     kokoro = FakeKokoro()
     player = FakeAudioPlayer()
@@ -101,6 +120,42 @@ def test_sounddevice_player_uses_selected_output_device(monkeypatch):
     SoundDevicePlayer(output_device="USB Speaker").play([0.1], 24000)
 
     assert calls == [([0.1], 24000, True, "USB Speaker")]
+
+
+def test_keyboard_transcript_source_reads_typed_lines():
+    source = KeyboardTranscriptSource(input_stream=StringIO("auth 버그 고쳐\n\n종료\n"))
+
+    try:
+        transcripts = []
+        for _ in range(20):
+            transcript = source.next_transcript()
+            if transcript is not None:
+                transcripts.append(transcript)
+            if len(transcripts) == 2:
+                break
+            time.sleep(0.01)
+    finally:
+        source.close()
+
+    assert [(item.text, item.source) for item in transcripts] == [
+        ("auth 버그 고쳐", "keyboard"),
+        ("종료", "keyboard"),
+    ]
+
+
+def test_merged_transcript_source_polls_sources_in_order_and_closes_them():
+    first = FakeTranscriptSource([None, "typed"])
+    second = FakeTranscriptSource(["spoken"])
+    source = MergedTranscriptSource([first, second])
+
+    first_transcript = source.next_transcript()
+    second_transcript = source.next_transcript()
+    source.close()
+
+    assert first_transcript == "spoken"
+    assert second_transcript == "typed"
+    assert first.closes == 1
+    assert second.closes == 1
 
 
 def test_microphone_source_uses_selected_input_device(monkeypatch):
