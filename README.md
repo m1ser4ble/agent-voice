@@ -71,6 +71,9 @@ Voice mode entrypoint:
 uv run agent-voice codex
 ```
 
+The default Kokoro voice preset is `jarvis_style`. This is a stock Kokoro
+assistant-style preset, not a celebrity or movie-character voice clone.
+
 Pass Codex options after the `codex` target. `agent-voice` does not parse these
 options, so Codex version changes should not require `agent-voice` CLI changes:
 
@@ -84,7 +87,26 @@ Put `agent-voice` options before the target:
 
 ```bash
 uv run agent-voice --language ko --whisper-model tiny --stt-language ko codex
-uv run agent-voice --tts-voice af_sarah codex --model <model>
+uv run agent-voice --voice-preset high_quality codex
+uv run agent-voice --tts-voice af_sarah --tts-speed 1.0 codex --model <model>
+```
+
+Voice presets live in `src/agent_voice/voice_presets.toml`. Add or override
+presets with your own TOML file:
+
+```toml
+[defaults]
+preset = "workstation"
+
+[presets.workstation]
+voice = "bm_george"
+lang = "en-gb"
+speed = 0.9
+description = "Local workstation voice."
+```
+
+```bash
+uv run agent-voice --voice-config ./voice-presets.toml codex
 ```
 
 Start the current persistent text-mode Codex session:

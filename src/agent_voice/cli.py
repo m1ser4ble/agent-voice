@@ -12,6 +12,7 @@ from agent_voice.doctor import DoctorProbe, build_doctor_parser, run_doctor
 from agent_voice.interrupt import VoiceSession
 from agent_voice.loop import VoiceLoop
 from agent_voice.presenter import VoicePresenter
+from agent_voice.voice_config import VoicePresetError, resolve_voice_settings
 
 
 AgentFactory = Callable[[tuple[str, ...]], Agent]
@@ -152,6 +153,12 @@ def _run_voice_target(
     voice_loop_factory: VoiceLoopFactory | None,
     output: TextIO,
 ) -> int:
+    try:
+        _apply_voice_settings(args)
+    except VoicePresetError as error:
+        print(str(error), file=output)
+        return 2
+
     factory = voice_loop_factory or _build_default_voice_loop
     try:
         loop = factory(command, args)
@@ -182,6 +189,7 @@ def _build_default_voice_loop(
             whisper_language=args.stt_language,
             tts_voice=args.tts_voice,
             tts_lang=args.tts_lang,
+            tts_speed=args.tts_speed,
             sample_rate=args.sample_rate,
             vad_threshold=args.vad_threshold,
         )
@@ -191,6 +199,20 @@ def _build_default_voice_loop(
             "Run `uv sync` and ensure PortAudio/sounddevice can access your "
             f"mic and speaker. Missing dependency: {error.name}."
         ) from error
+
+
+def _apply_voice_settings(args: argparse.Namespace) -> None:
+    settings = resolve_voice_settings(
+        config_path=Path(args.voice_config) if args.voice_config else None,
+        preset_name=args.voice_preset,
+        voice_override=args.tts_voice,
+        lang_override=args.tts_lang,
+        speed_override=args.tts_speed,
+    )
+    args.voice_preset = settings.preset
+    args.tts_voice = settings.voice
+    args.tts_lang = settings.lang
+    args.tts_speed = settings.speed
 
 
 def _build_agent_command(target: str, agent_args: Sequence[str]) -> tuple[str, ...]:
@@ -314,14 +336,30 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional Whisper language hint such as 'ko' or 'en'.",
     )
     parser.add_argument(
+        "--voice-config",
+        default=None,
+        help="Optional TOML file that adds or overrides voice presets.",
+    )
+    parser.add_argument(
+        "--voice-preset",
+        default=None,
+        help="Voice preset name from the bundled or user voice config.",
+    )
+    parser.add_argument(
         "--tts-voice",
-        default="af_sarah",
-        help="Kokoro voice name.",
+        default=None,
+        help="Override the Kokoro voice name from the selected voice preset.",
     )
     parser.add_argument(
         "--tts-lang",
-        default="en-us",
-        help="Kokoro language/accent code.",
+        default=None,
+        help="Override the Kokoro language/accent code from the selected voice preset.",
+    )
+    parser.add_argument(
+        "--tts-speed",
+        type=float,
+        default=None,
+        help="Override the Kokoro speech speed from the selected voice preset.",
     )
     parser.add_argument(
         "--sample-rate",

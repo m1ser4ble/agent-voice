@@ -81,6 +81,9 @@ Implemented:
 - `MicrophoneWhisperTranscriptSource` implementation with mic capture, simple
   energy VAD, Smart Turn, and faster-whisper
 - `KokoroSpeaker` implementation with Kokoro ONNX and `sounddevice`
+- bundled voice preset config with `jarvis_style` as the default Kokoro preset
+- `--voice-config`, `--voice-preset`, `--tts-voice`, `--tts-lang`, and
+  `--tts-speed` CLI controls
 - default CLI voice-mode wiring through `VoiceLoop`
 - `agent-voice doctor` runtime readiness checks for packages, Codex/Pi command
   lookup, audio input/output devices, and Kokoro cache status
@@ -132,6 +135,17 @@ uv run agent-voice codex resume
 uv run agent-voice codex --model <model>
 ```
 
+The default voice preset is `jarvis_style`, defined in
+`src/agent_voice/voice_presets.toml`. It is a stock Kokoro assistant-style
+preset, not a celebrity or movie-character voice clone. Override it before the
+target:
+
+```bash
+uv run agent-voice --voice-preset high_quality codex
+uv run agent-voice --tts-voice af_sarah --tts-speed 1.0 codex
+uv run agent-voice --voice-config ./voice-presets.toml codex
+```
+
 Use text mode for the keyboard-driven debug path:
 
 ```bash
@@ -171,7 +185,7 @@ Recommended next task:
 
 1. Run real hardware E2E: `uv run agent-voice codex` with mic and speaker.
 2. Tune `MicrophoneWhisperTranscriptSource` thresholds and latency.
-3. Decide Kokoro language/voice defaults for Korean summaries.
+3. Listen-test and tune `jarvis_style` against real spoken summaries.
 4. Add structured Pi / Claude Code adapters.
 
 Keep the public contract local-first and avoid Realtime API dependency.

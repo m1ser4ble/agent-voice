@@ -76,6 +76,7 @@ flowchart LR
 | `AgentAdapter` | Starts a coding agent, sends user input, and reads available agent output. | Implemented as `PexpectAgent`; Codex and Pi both use opaque target-argument passthrough. |
 | `VoicePresenter` | Converts raw agent output into short speech-ready summaries. | Implemented as rule-based summaries. |
 | `Speaker` | Speaks presenter output and supports `stop()` for barge-in. Kokoro is the intended default TTS backend. | Protocol implemented in `loop.py`; `KokoroSpeaker` implemented in `providers.py` using Kokoro ONNX plus `sounddevice`. Real-device tuning still needed. |
+| `VoicePresetConfig` | Resolves named TTS presets into provider settings such as voice, language/accent, and speech speed. | Implemented through bundled `voice_presets.toml`, optional `--voice-config`, `--voice-preset`, and explicit `--tts-*` CLI overrides. |
 | `InterruptManager` | Decides whether a transcript should interrupt speech in the current state. | Implemented and wired into `VoiceLoop` and default CLI voice runtime. |
 | `VoiceSession` | Tracks `LISTENING`, `THINKING`, `SPEAKING`, and `INTERRUPTED`. | Implemented. |
 | `ProviderSetup` | Installs, configures, validates, and starts external providers such as Smart Turn/VAD, Whisper, Kokoro, and agent adapters. | Setup/profile installation is not implemented. Basic validation exists through `agent-voice doctor`. |
@@ -114,6 +115,17 @@ uv run agent-voice codex
 `agent-voice doctor` is implemented as a read-only local readiness check.
 Setup/profile commands are still planned; they should make the local voice
 stack easier to configure, not just diagnose.
+
+Voice preset selection is implemented as a small configuration layer:
+
+```bash
+uv run agent-voice --voice-preset jarvis_style codex
+uv run agent-voice --voice-config ./voice-presets.toml codex
+uv run agent-voice --tts-voice af_bella --tts-speed 1.0 codex
+```
+
+The default preset is `jarvis_style`, which uses a stock Kokoro voice and a
+slower assistant-style speed. It is not a celebrity or character voice clone.
 
 Current verified provider smoke:
 

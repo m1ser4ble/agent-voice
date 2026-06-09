@@ -265,6 +265,7 @@ def build_local_voice_loop(
     whisper_language: str | None = None,
     tts_voice: str = "af_sarah",
     tts_lang: str = "en-us",
+    tts_speed: float = 1.0,
     sample_rate: int = 16000,
     vad_threshold: float = 0.01,
 ) -> ManagedVoiceLoop:
@@ -279,6 +280,7 @@ def build_local_voice_loop(
         speaker = KokoroSpeaker.from_cache(
             cache_dir=cache_dir / "kokoro",
             voice=tts_voice,
+            speed=tts_speed,
             lang=tts_lang,
         )
     except Exception:

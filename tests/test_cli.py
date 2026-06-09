@@ -133,6 +133,95 @@ def test_cli_codex_defaults_to_voice_mode_with_passthrough_agent_args():
     assert captured_commands == [("codex", "resume", "--model", "gpt-5")]
 
 
+def test_cli_voice_mode_applies_default_voice_preset():
+    voice_loop = FakeVoiceLoop()
+    captured_settings = []
+
+    exit_code = main(
+        ["codex"],
+        voice_loop_factory=lambda _, args: (
+            captured_settings.append((args.tts_voice, args.tts_lang, args.tts_speed))
+            or voice_loop
+        ),
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert captured_settings == [("am_michael", "en-us", 0.94)]
+
+
+def test_cli_tts_overrides_take_precedence_over_voice_preset():
+    voice_loop = FakeVoiceLoop()
+    captured_settings = []
+
+    exit_code = main(
+        [
+            "--voice-preset",
+            "high_quality",
+            "--tts-voice",
+            "af_bella",
+            "--tts-lang",
+            "en-us",
+            "--tts-speed",
+            "1.05",
+            "codex",
+        ],
+        voice_loop_factory=lambda _, args: (
+            captured_settings.append((args.tts_voice, args.tts_lang, args.tts_speed))
+            or voice_loop
+        ),
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert captured_settings == [("af_bella", "en-us", 1.05)]
+
+
+def test_cli_voice_config_file_can_change_default_preset(tmp_path):
+    config_path = tmp_path / "voice-presets.toml"
+    config_path.write_text(
+        """
+        [defaults]
+        preset = "workstation"
+
+        [presets.workstation]
+        voice = "bm_george"
+        lang = "en-gb"
+        speed = 0.9
+        """,
+        encoding="utf-8",
+    )
+    voice_loop = FakeVoiceLoop()
+    captured_settings = []
+
+    exit_code = main(
+        ["--voice-config", str(config_path), "codex"],
+        voice_loop_factory=lambda _, args: (
+            captured_settings.append((args.tts_voice, args.tts_lang, args.tts_speed))
+            or voice_loop
+        ),
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert captured_settings == [("bm_george", "en-gb", 0.9)]
+
+
+def test_cli_unknown_voice_preset_fails_before_starting_voice_loop():
+    voice_loop = FakeVoiceLoop()
+    output = StringIO()
+
+    exit_code = main(
+        ["--voice-preset", "missing", "codex"],
+        voice_loop_factory=lambda *_: voice_loop,
+        output=output,
+    )
+
+    assert exit_code == 2
+    assert voice_loop.runs == 0
+    assert "unknown voice preset 'missing'" in output.getvalue()
+
+
 def test_cli_doctor_runs_runtime_checks_instead_of_agent_target():
     agent = FakeAgent()
     voice_loop = FakeVoiceLoop()
