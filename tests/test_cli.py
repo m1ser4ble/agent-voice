@@ -147,14 +147,16 @@ def test_cli_voice_mode_applies_default_voice_preset():
     exit_code = main(
         ["codex"],
         voice_loop_factory=lambda _, args: (
-            captured_settings.append((args.tts_voice, args.tts_lang, args.tts_speed))
+            captured_settings.append(
+                (args.tts_voice, args.tts_lang, args.tts_speed, args.stt_language)
+            )
             or voice_loop
         ),
         output=StringIO(),
     )
 
     assert exit_code == 0
-    assert captured_settings == [("am_michael", "en-us", 0.94)]
+    assert captured_settings == [("am_michael", "en-us", 0.94, "ko")]
 
 
 def test_cli_voice_mode_accepts_audio_device_selection():

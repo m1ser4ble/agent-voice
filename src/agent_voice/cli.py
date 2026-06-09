@@ -347,8 +347,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--stt-language",
-        default=None,
-        help="Optional Whisper language hint such as 'ko' or 'en'.",
+        default="ko",
+        help="Whisper language hint such as 'ko' or 'en'. Defaults to 'ko'.",
     )
     parser.add_argument(
         "--voice-config",

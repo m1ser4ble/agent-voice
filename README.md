@@ -99,13 +99,15 @@ uv run agent-voice codex resume --model <model>
 Put `agent-voice` options before the target:
 
 ```bash
-uv run agent-voice --language ko --whisper-model tiny --stt-language ko codex
+uv run agent-voice --language ko --whisper-model tiny codex
 uv run agent-voice --voice-preset high_quality codex
 uv run agent-voice --tts-voice af_sarah --tts-speed 1.0 codex --model <model>
 ```
 
 `--language ko` controls the speech summary language and is the default.
-`--stt-language ko` tells Whisper to bias transcription toward Korean input.
+`--stt-language ko` controls the Whisper transcription language and is also the
+default. Override it, for example with `--stt-language en`, when you want to
+speak another language.
 Use `--quiet-agent-io` to hide terminal transcript/raw-output events, or
 `--no-keyboard` if you want mic-only input.
 
