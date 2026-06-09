@@ -7,7 +7,13 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Protocol, TextIO
 
-from agent_voice.adapter import Agent, CodexAppServerAgent, PexpectAgent
+from agent_voice.adapter import (
+    Agent,
+    CodexAppServerAgent,
+    CodexRemoteAppServerAgent,
+    PexpectAgent,
+)
+from agent_voice.companion import CodexTuiCompanionConfig, run_codex_tui_companion
 from agent_voice.doctor import DoctorProbe, build_doctor_parser, run_doctor
 from agent_voice.interrupt import VoiceSession
 from agent_voice.loop import VoiceLoop
@@ -24,6 +30,7 @@ class VoiceLoopRunner(Protocol):
 
 
 VoiceLoopFactory = Callable[[tuple[str, ...], argparse.Namespace], VoiceLoopRunner]
+CompanionRunner = Callable[[CodexTuiCompanionConfig], int]
 
 
 class VoiceModeUnavailableError(RuntimeError):
@@ -56,6 +63,7 @@ def main(
     *,
     agent_factory: AgentFactory | None = None,
     voice_loop_factory: VoiceLoopFactory | None = None,
+    companion_runner: CompanionRunner | None = None,
     doctor_probe: DoctorProbe | None = None,
     output: TextIO | None = None,
 ) -> int:
@@ -64,6 +72,9 @@ def main(
 
     if args.target == "doctor":
         return _run_doctor(args, probe=doctor_probe, output=output)
+
+    if args.target == "companion":
+        return _run_companion(args, runner=companion_runner, output=output)
 
     command = _build_agent_command(args.target, args.agent_args)
     return _run_target(
@@ -87,6 +98,67 @@ def _run_doctor(
     )
     options = parser.parse_args(args.agent_args)
     return run_doctor(options, probe=probe, output=output)
+
+
+def _run_companion(
+    args: argparse.Namespace,
+    *,
+    runner: CompanionRunner | None,
+    output: TextIO,
+) -> int:
+    if not args.agent_args or args.agent_args[0] != "codex":
+        print(
+            "usage: agent-voice companion codex [resume <thread-id>] [-- <codex args>]",
+            file=output,
+        )
+        return 2
+
+    try:
+        thread_id, codex_args = _parse_companion_codex_args(
+            tuple(args.agent_args[1:]),
+            configured_thread_id=args.codex_thread_id,
+        )
+    except ValueError as error:
+        print(str(error), file=output)
+        return 2
+
+    config = CodexTuiCompanionConfig(
+        port=args.codex_app_server_port,
+        url=args.codex_app_server_url,
+        thread_id=thread_id,
+        cwd=Path.cwd(),
+        log_dir=Path(args.companion_log_dir) if args.companion_log_dir else None,
+        voice_args=tuple(_companion_voice_args(args)),
+        codex_args=codex_args,
+    )
+    return (runner or run_codex_tui_companion)(config)
+
+
+def _parse_companion_codex_args(
+    codex_args: tuple[str, ...],
+    *,
+    configured_thread_id: str | None,
+) -> tuple[str | None, tuple[str, ...]]:
+    thread_id = configured_thread_id
+    if codex_args[:1] == ("resume",):
+        if len(codex_args) < 2 or codex_args[1] == "--":
+            raise ValueError(
+                "usage: agent-voice companion codex resume <thread-id> "
+                "[-- <codex args>]"
+            )
+        resume_thread_id = codex_args[1]
+        if thread_id is not None and thread_id != resume_thread_id:
+            raise ValueError(
+                "conflicting Codex thread ids: "
+                f"--codex-thread-id {thread_id} and resume {resume_thread_id}"
+            )
+        thread_id = resume_thread_id
+        codex_args = codex_args[2:]
+
+    if codex_args and codex_args[0] == "--":
+        codex_args = codex_args[1:]
+
+    return thread_id, codex_args
 
 
 def _run_target(
@@ -114,7 +186,11 @@ def _run_target(
         )
 
     factory = agent_factory or (lambda command: _build_agent(command, args))
-    agent = factory(command)
+    try:
+        agent = factory(command)
+    except ValueError as error:
+        print(str(error), file=output)
+        return 2
     presenter = VoicePresenter(language=args.language)
     session = VoiceSession()
 
@@ -163,7 +239,7 @@ def _run_voice_target(
     args._agent_voice_output = output
     try:
         loop = factory(command, args)
-    except VoiceModeUnavailableError as error:
+    except (ValueError, VoiceModeUnavailableError) as error:
         print(str(error), file=output)
         return 2
     return loop.run_forever()
@@ -255,7 +331,28 @@ def _build_agent(command: tuple[str, ...], args: argparse.Namespace) -> Agent:
         if command[0] != "codex":
             raise ValueError("codex-app-server backend can only be used with codex")
         return CodexAppServerAgent(command=command)
+    if args.agent_backend == "codex-remote-app-server":
+        if command[0] != "codex":
+            raise ValueError(
+                "codex-remote-app-server backend can only be used with codex"
+            )
+        return CodexRemoteAppServerAgent(
+            url=_codex_remote_app_server_url(args),
+            thread_id=args.codex_thread_id,
+            cwd=None,
+        )
     raise ValueError(f"unknown agent backend: {args.agent_backend}")
+
+
+def _codex_remote_app_server_url(args: argparse.Namespace) -> str:
+    if args.codex_app_server_url:
+        return args.codex_app_server_url
+    if args.codex_app_server_port is not None:
+        return f"ws://127.0.0.1:{args.codex_app_server_port}"
+    raise ValueError(
+        "codex-remote-app-server requires --codex-app-server-url "
+        "or --codex-app-server-port"
+    )
 
 
 def _submit_once(
@@ -469,18 +566,53 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--agent-backend",
-        choices=("pexpect", "codex-app-server"),
+        choices=("pexpect", "codex-app-server", "codex-remote-app-server"),
         default="pexpect",
         help=(
-            "Agent control backend. 'codex-app-server' uses Codex JSON-RPC "
-            "events instead of scraping the terminal TUI."
+            "Agent control backend. 'codex-app-server' starts a private "
+            "Codex JSON-RPC server; 'codex-remote-app-server' connects to a "
+            "shared Codex app-server so a Codex TUI can use --remote."
+        ),
+    )
+    parser.add_argument(
+        "--codex-app-server-url",
+        default=None,
+        help=(
+            "WebSocket URL for a shared Codex app-server, for example "
+            "ws://127.0.0.1:4500. Used with --agent-backend "
+            "codex-remote-app-server."
+        ),
+    )
+    parser.add_argument(
+        "--codex-app-server-port",
+        type=int,
+        default=None,
+        help=(
+            "Localhost port for a shared Codex app-server. Equivalent to "
+            "--codex-app-server-url ws://127.0.0.1:PORT."
+        ),
+    )
+    parser.add_argument(
+        "--codex-thread-id",
+        default=None,
+        help=(
+            "Existing Codex thread id to resume on the shared app-server. "
+            "If omitted, agent-voice starts a new thread."
+        ),
+    )
+    parser.add_argument(
+        "--companion-log-dir",
+        default=None,
+        help=(
+            "Directory for hidden companion logs when running "
+            "`agent-voice companion codex`."
         ),
     )
 
     parser.add_argument(
         "target",
-        choices=("doctor", "codex", "pi"),
-        help="Command to run. Use 'doctor', 'codex', or 'pi'.",
+        choices=("doctor", "codex", "pi", "companion"),
+        help="Command to run. Use 'doctor', 'codex', 'pi', or 'companion'.",
     )
     parser.add_argument(
         "agent_args",
@@ -489,6 +621,51 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+def _companion_voice_args(args: argparse.Namespace) -> list[str]:
+    voice_args: list[str] = []
+    _append_changed(voice_args, "--language", args.language, "ko")
+    _append_changed(voice_args, "--idle-reads", args.idle_reads, 4)
+    _append_changed(voice_args, "--max-reads", args.max_reads, 600)
+    _append_changed(voice_args, "--poll-interval", args.poll_interval, 0.2)
+    _append_changed(voice_args, "--cache-dir", args.cache_dir, ".cache/agent-voice")
+    _append_changed(voice_args, "--whisper-model", args.whisper_model, "tiny")
+    _append_changed(voice_args, "--stt-language", args.stt_language, "ko")
+    _append_optional(voice_args, "--voice-config", args.voice_config)
+    _append_optional(voice_args, "--voice-preset", args.voice_preset)
+    _append_optional(voice_args, "--tts-voice", args.tts_voice)
+    _append_optional(voice_args, "--tts-lang", args.tts_lang)
+    _append_optional(voice_args, "--tts-speed", args.tts_speed)
+    _append_changed(voice_args, "--tts-backend", args.tts_backend, "auto")
+    _append_optional(voice_args, "--supertonic-voice", args.supertonic_voice)
+    _append_optional(voice_args, "--macos-say-voice", args.macos_say_voice)
+    _append_optional(voice_args, "--macos-say-rate", args.macos_say_rate)
+    _append_changed(voice_args, "--sample-rate", args.sample_rate, 16000)
+    _append_changed(voice_args, "--vad-threshold", args.vad_threshold, 0.01)
+    _append_optional(voice_args, "--input-device", args.input_device)
+    _append_optional(voice_args, "--output-device", args.output_device)
+    if args.quiet_agent_io:
+        voice_args.append("--quiet-agent-io")
+    if args.no_aec:
+        voice_args.append("--no-aec")
+    _append_changed(voice_args, "--aec-delay-ms", args.aec_delay_ms, 120)
+    return voice_args
+
+
+def _append_changed(
+    values: list[str],
+    flag: str,
+    value: object,
+    default: object,
+) -> None:
+    if value != default:
+        values.extend([flag, str(value)])
+
+
+def _append_optional(values: list[str], flag: str, value: object | None) -> None:
+    if value is not None:
+        values.extend([flag, str(value)])
 
 
 def _collect_agent_output(

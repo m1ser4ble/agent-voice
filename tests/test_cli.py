@@ -338,6 +338,96 @@ def test_cli_doctor_runs_runtime_checks_instead_of_agent_target():
     assert "Audio devices:" in output.getvalue()
 
 
+def test_cli_companion_codex_runs_foreground_tui_wrapper(tmp_path):
+    captured = []
+
+    exit_code = main(
+        [
+            "--whisper-model",
+            "base",
+            "--codex-app-server-port",
+            "4567",
+            "--codex-thread-id",
+            "thread-123",
+            "--companion-log-dir",
+            str(tmp_path / "logs"),
+            "companion",
+            "codex",
+            "--",
+            "--model",
+            "gpt-5.4",
+        ],
+        companion_runner=lambda config: captured.append(config) or 0,
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert len(captured) == 1
+    assert captured[0].port == 4567
+    assert captured[0].thread_id == "thread-123"
+    assert captured[0].log_dir == tmp_path / "logs"
+    assert captured[0].voice_args == ("--whisper-model", "base")
+    assert captured[0].codex_args == ("--model", "gpt-5.4")
+
+
+def test_cli_companion_codex_resume_uses_thread_id_as_user_expects():
+    captured = []
+
+    exit_code = main(
+        [
+            "--whisper-model",
+            "base",
+            "companion",
+            "codex",
+            "resume",
+            "thread-123",
+            "--",
+            "--model",
+            "gpt-5.4",
+        ],
+        companion_runner=lambda config: captured.append(config) or 0,
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert captured[0].thread_id == "thread-123"
+    assert captured[0].voice_args == ("--whisper-model", "base")
+    assert captured[0].codex_args == ("--model", "gpt-5.4")
+
+
+def test_cli_companion_rejects_conflicting_resume_thread_ids():
+    output = StringIO()
+
+    exit_code = main(
+        [
+            "--codex-thread-id",
+            "thread-a",
+            "companion",
+            "codex",
+            "resume",
+            "thread-b",
+        ],
+        companion_runner=lambda _config: 0,
+        output=output,
+    )
+
+    assert exit_code == 2
+    assert "conflicting Codex thread ids" in output.getvalue()
+
+
+def test_cli_companion_requires_codex_subtarget():
+    output = StringIO()
+
+    exit_code = main(
+        ["companion", "pi"],
+        companion_runner=lambda _config: 0,
+        output=output,
+    )
+
+    assert exit_code == 2
+    assert "usage: agent-voice companion codex" in output.getvalue()
+
+
 def test_cli_codex_once_requires_text_mode():
     agent = FakeAgent()
     output = StringIO()
@@ -409,6 +499,95 @@ def test_cli_codex_app_server_backend_uses_structured_codex_agent(monkeypatch):
 
     assert exit_code == 0
     assert created_commands == [("codex",)]
+
+
+def test_cli_codex_remote_backend_requires_url_or_port():
+    output = StringIO()
+
+    exit_code = main(
+        [
+            "--agent-backend",
+            "codex-remote-app-server",
+            "--text",
+            "--once",
+            "테스트는?",
+            "codex",
+        ],
+        output=output,
+    )
+
+    assert exit_code == 2
+    assert "requires --codex-app-server-url or --codex-app-server-port" in output.getvalue()
+
+
+def test_cli_codex_remote_backend_uses_configured_url_and_thread(monkeypatch):
+    created = []
+
+    class FakeCodexRemoteAppServerAgent(FakeAgent):
+        def __init__(self, **kwargs):
+            super().__init__()
+            created.append(kwargs)
+
+    monkeypatch.setattr(
+        "agent_voice.cli.CodexRemoteAppServerAgent",
+        FakeCodexRemoteAppServerAgent,
+    )
+
+    exit_code = main(
+        [
+            "--agent-backend",
+            "codex-remote-app-server",
+            "--codex-app-server-url",
+            "ws://127.0.0.1:4500",
+            "--codex-thread-id",
+            "thread-123",
+            "--text",
+            "--once",
+            "테스트는?",
+            "codex",
+        ],
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert created == [
+        {
+            "url": "ws://127.0.0.1:4500",
+            "thread_id": "thread-123",
+            "cwd": None,
+        }
+    ]
+
+
+def test_cli_codex_remote_backend_builds_url_from_port(monkeypatch):
+    created = []
+
+    class FakeCodexRemoteAppServerAgent(FakeAgent):
+        def __init__(self, **kwargs):
+            super().__init__()
+            created.append(kwargs)
+
+    monkeypatch.setattr(
+        "agent_voice.cli.CodexRemoteAppServerAgent",
+        FakeCodexRemoteAppServerAgent,
+    )
+
+    exit_code = main(
+        [
+            "--agent-backend",
+            "codex-remote-app-server",
+            "--codex-app-server-port",
+            "4501",
+            "--text",
+            "--once",
+            "테스트는?",
+            "codex",
+        ],
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert created[0]["url"] == "ws://127.0.0.1:4501"
 
 
 def test_cli_agent_options_after_target_are_not_parsed_as_product_options():

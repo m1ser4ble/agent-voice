@@ -150,6 +150,52 @@ file-change events into the existing presenter path while ignoring command
 execution lifecycle noise. It is an MVP for comparing output quality before
 replacing the pexpect backend.
 
+Codex TUI companion mode:
+
+```bash
+# Product path: show only the Codex TUI in this terminal.
+# agent-voice starts a hidden app-server and hidden voice worker, then attaches
+# the foreground Codex TUI to the same thread.
+uv run agent-voice companion codex
+
+# Voice options stay before `companion`; Codex TUI options go after `--`.
+uv run agent-voice --whisper-model base companion codex -- --model gpt-5.4
+
+# Resume an existing Codex thread with the same shape as normal Codex CLI.
+uv run agent-voice companion codex resume <thread-id>
+```
+
+The hidden process logs are written under `.cache/agent-voice/companion/` by
+default. Use `--companion-log-dir <path>` to choose another log directory.
+
+Manual/debug equivalent:
+
+```bash
+# Terminal 1: shared Codex event/session server.
+codex app-server --listen ws://127.0.0.1:4500
+
+# Terminal 2: normal Codex TUI attached to the chosen thread.
+codex resume <thread-id> --remote ws://127.0.0.1:4500 --no-alt-screen
+
+# Terminal 3: agent-voice attached as a second client.
+uv run agent-voice \
+  --agent-backend codex-remote-app-server \
+  --codex-app-server-port 4500 \
+  --codex-thread-id <thread-id> \
+  codex
+```
+
+Use `companion codex resume <thread-id>` when you want to attach voice to an
+existing Codex thread instead of starting a new one. This mode is the intended
+shape for a voice companion: Codex TUI remains visible and keyboard-driven,
+while `agent-voice` submits microphone transcripts through the same app-server
+event/session layer and speaks presenter output. `--codex-thread-id <id>` is
+still available for scripts, but the `resume` form is the normal user-facing
+shape.
+
+For debugging, `scripts/codex_companion.py` still launches a three-pane tmux
+layout with the app-server, Codex TUI, and voice worker visible separately.
+
 By default, `agent-voice` uses the OS/sounddevice default input and output
 devices. Select a specific microphone or speaker by sounddevice index or name
 when you want to override the system default. Use `doctor --list-devices` to

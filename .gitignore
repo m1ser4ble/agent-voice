@@ -13,3 +13,4 @@ build/
 .env.*
 !.env.example
 .omx/
+data/stt-fixtures/ko/local/

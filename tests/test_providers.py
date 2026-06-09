@@ -157,6 +157,11 @@ class FakeAgent:
         self.stops += 1
 
 
+class FakeStatusAgent(FakeAgent):
+    def status_lines(self):
+        return ("agent status: ready",)
+
+
 class StartFailAgent(FakeAgent):
     def start(self):
         super().start()
@@ -623,6 +628,25 @@ def test_managed_voice_loop_starts_agent_and_closes_resources():
     assert agent.starts == 1
     assert agent.stops == 1
     assert source.closes == 1
+
+
+def test_managed_voice_loop_prints_agent_status_after_start():
+    loop = FakeLoop()
+    agent = FakeStatusAgent()
+    output = StringIO()
+    runner = ManagedVoiceLoop(
+        loop=loop,
+        agent=agent,
+        status_lines=("static status",),
+        output=output,
+    )
+
+    runner.run_forever()
+
+    assert output.getvalue().splitlines() == [
+        "static status",
+        "agent status: ready",
+    ]
 
 
 def test_managed_voice_loop_closes_resources_when_agent_start_fails():

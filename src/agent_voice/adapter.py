@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import base64
+import hashlib
+import os
 import queue
+import socket
 import subprocess
 import threading
 import time
@@ -9,6 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 
 class Agent(Protocol):
@@ -107,6 +112,7 @@ class CodexAppServerAgent:
     )
     _thread_id: str | None = field(default=None, init=False, repr=False)
     _turn_active: bool = field(default=False, init=False, repr=False)
+    _turn_id: str | None = field(default=None, init=False, repr=False)
     _next_id: int = field(default=1, init=False, repr=False)
     _agent_message_deltas: dict[str, list[str]] = field(
         default_factory=dict,
@@ -338,6 +344,270 @@ class CodexAppServerAgent:
         text = "".join(self._unknown_phase_agent_messages)
         self._unknown_phase_agent_messages.clear()
         return text
+
+
+@dataclass
+class CodexRemoteAppServerAgent(CodexAppServerAgent):
+    url: str = "ws://127.0.0.1:4500"
+    thread_id: str | None = None
+    _connection: _WebSocketJsonRpcConnection | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+
+    def start(self) -> None:
+        if self._connection is not None:
+            return
+
+        self._connection = _WebSocketJsonRpcConnection.connect(self.url)
+        self._reader = threading.Thread(target=self._read_messages, daemon=True)
+        self._reader.start()
+
+        self._request(
+            "initialize",
+            {
+                "clientInfo": {
+                    "name": "agent-voice",
+                    "title": "agent-voice",
+                    "version": "0.1.0",
+                },
+                "capabilities": {"experimentalApi": True},
+            },
+        )
+        self._notify("initialized", {})
+
+        if self.thread_id:
+            thread = self._request("thread/resume", {"threadId": self.thread_id})[
+                "thread"
+            ]
+        else:
+            params: dict[str, Any] = {}
+            if self.cwd is not None:
+                params["cwd"] = str(self.cwd)
+            thread = self._request("thread/start", params)["thread"]
+        self._thread_id = thread["id"]
+
+    def submit(self, text: str) -> None:
+        if self._thread_id is None:
+            raise RuntimeError("agent has not been started")
+
+        if self._turn_active and self._turn_id is not None:
+            self._request(
+                "turn/steer",
+                {
+                    "threadId": self._thread_id,
+                    "expectedTurnId": self._turn_id,
+                    "input": [{"type": "text", "text": text}],
+                },
+                wait=False,
+            )
+            return
+
+        result = self._request(
+            "turn/start",
+            {
+                "threadId": self._thread_id,
+                "input": [{"type": "text", "text": text}],
+            },
+            wait=True,
+        )
+        self._turn_id = _first_string(_mapping(result.get("turn")), ("id",))
+        self._reset_turn_output()
+        self._turn_active = True
+
+    def stop(self) -> None:
+        connection = self._connection
+        self._connection = None
+        if connection is not None:
+            connection.close()
+        if self._reader is not None:
+            self._reader.join(timeout=0.5)
+            self._reader = None
+
+    def _read_messages(self) -> None:
+        connection = self._connection
+        if connection is None:
+            return
+        while self._connection is connection:
+            try:
+                message = connection.recv_json()
+            except (OSError, ValueError, TimeoutError):
+                continue
+            if isinstance(message, dict):
+                self._messages.put(message)
+
+    def _send(self, message: dict[str, Any]) -> None:
+        connection = self._connection
+        if connection is None:
+            raise RuntimeError("codex app-server websocket is unavailable")
+        connection.send_json(message)
+
+    def _handle_notification(self, message: Mapping[str, Any]) -> str:
+        params = _mapping(message.get("params"))
+        if message.get("method") == "turn/started":
+            self._turn_id = _first_string(_mapping(params.get("turn")), ("id",))
+        if message.get("method") == "turn/completed":
+            self._turn_id = None
+        return super()._handle_notification(message)
+
+    def status_lines(self) -> tuple[str, ...]:
+        if self._thread_id is None:
+            return (f"codex app-server: {self.url}",)
+        return (
+            f"codex app-server: {self.url}",
+            f"codex thread id: {self._thread_id}",
+            (
+                "codex TUI attach: "
+                f"codex resume {self._thread_id} --remote {self.url} --no-alt-screen"
+            ),
+        )
+
+
+class _WebSocketJsonRpcConnection:
+    def __init__(self, sock: socket.socket) -> None:
+        self._sock = sock
+        self._lock = threading.Lock()
+
+    @classmethod
+    def connect(cls, url: str) -> _WebSocketJsonRpcConnection:
+        parsed = urlparse(url)
+        if parsed.scheme != "ws":
+            raise ValueError("only ws:// app-server URLs are supported")
+        if parsed.hostname is None:
+            raise ValueError("app-server URL must include a host")
+
+        port = parsed.port or 80
+        path = parsed.path or "/"
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+
+        sock = socket.create_connection((parsed.hostname, port), timeout=5.0)
+        sock.settimeout(0.5)
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        request = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {parsed.hostname}:{port}\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            "\r\n"
+        )
+        sock.sendall(request.encode("ascii"))
+        response = cls._read_http_response(sock)
+        if " 101 " not in response.split("\r\n", maxsplit=1)[0]:
+            sock.close()
+            raise ConnectionError("app-server websocket handshake failed")
+
+        accept = _websocket_accept(key)
+        if f"sec-websocket-accept: {accept.casefold()}" not in response.casefold():
+            sock.close()
+            raise ConnectionError("app-server websocket accept header mismatch")
+        return cls(sock)
+
+    def send_json(self, message: dict[str, Any]) -> None:
+        data = json.dumps(message, ensure_ascii=False).encode("utf-8")
+        with self._lock:
+            self._sock.sendall(_websocket_client_text_frame(data))
+
+    def recv_json(self) -> dict[str, Any]:
+        while True:
+            opcode, payload = self._read_frame()
+            if opcode == 0x1:
+                value = json.loads(payload.decode("utf-8"))
+                if isinstance(value, dict):
+                    return value
+                raise ValueError("websocket JSON-RPC message was not an object")
+            if opcode == 0x8:
+                raise OSError("websocket closed")
+            if opcode == 0x9:
+                with self._lock:
+                    self._sock.sendall(_websocket_control_frame(0xA, payload))
+
+    def close(self) -> None:
+        try:
+            with self._lock:
+                self._sock.sendall(_websocket_control_frame(0x8, b""))
+        except OSError:
+            pass
+        self._sock.close()
+
+    @staticmethod
+    def _read_http_response(sock: socket.socket) -> str:
+        chunks: list[bytes] = []
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            data = b"".join(chunks)
+            if b"\r\n\r\n" in data:
+                return data.decode("iso-8859-1")
+        raise TimeoutError("timed out waiting for websocket handshake")
+
+    def _read_frame(self) -> tuple[int, bytes]:
+        header = self._read_exact(2)
+        first, second = header[0], header[1]
+        opcode = first & 0x0F
+        masked = bool(second & 0x80)
+        length = second & 0x7F
+        if length == 126:
+            length = int.from_bytes(self._read_exact(2), "big")
+        elif length == 127:
+            length = int.from_bytes(self._read_exact(8), "big")
+        mask = self._read_exact(4) if masked else b""
+        payload = self._read_exact(length)
+        if masked:
+            payload = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+        return opcode, payload
+
+    def _read_exact(self, length: int) -> bytes:
+        chunks: list[bytes] = []
+        remaining = length
+        while remaining:
+            try:
+                chunk = self._sock.recv(remaining)
+            except socket.timeout as error:
+                raise TimeoutError("timed out reading websocket frame") from error
+            if not chunk:
+                raise OSError("websocket closed")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+
+
+def _websocket_accept(key: str) -> str:
+    digest = hashlib.sha1(
+        (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")
+    ).digest()
+    return base64.b64encode(digest).decode("ascii")
+
+
+def _websocket_client_text_frame(payload: bytes) -> bytes:
+    return _websocket_frame(0x1, payload, masked=True)
+
+
+def _websocket_control_frame(opcode: int, payload: bytes) -> bytes:
+    return _websocket_frame(opcode, payload, masked=True)
+
+
+def _websocket_frame(opcode: int, payload: bytes, *, masked: bool) -> bytes:
+    first = 0x80 | opcode
+    mask_bit = 0x80 if masked else 0
+    length = len(payload)
+    if length < 126:
+        header = bytes([first, mask_bit | length])
+    elif length <= 0xFFFF:
+        header = bytes([first, mask_bit | 126]) + length.to_bytes(2, "big")
+    else:
+        header = bytes([first, mask_bit | 127]) + length.to_bytes(8, "big")
+    if not masked:
+        return header + payload
+    mask = os.urandom(4)
+    masked_payload = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+    return header + mask + masked_payload
 
 
 def _render_codex_app_server_message(message: Mapping[str, Any]) -> str:

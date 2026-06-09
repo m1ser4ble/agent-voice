@@ -518,9 +518,13 @@ class ManagedVoiceLoop:
 
     def run_forever(self) -> int:
         try:
+            self.agent.start()
             for line in self.status_lines:
                 print(line, file=self.output or sys.stdout, flush=True)
-            self.agent.start()
+            status_lines = getattr(self.agent, "status_lines", None)
+            if status_lines is not None:
+                for line in status_lines():
+                    print(line, file=self.output or sys.stdout, flush=True)
             return self.loop.run_forever()
         finally:
             self.agent.stop()
