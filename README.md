@@ -94,8 +94,11 @@ uv run agent-voice --voice-preset high_quality codex
 uv run agent-voice --tts-voice af_sarah --tts-speed 1.0 codex --model <model>
 ```
 
-Select a specific microphone or speaker by sounddevice index or name. Use
-`doctor --list-devices` to find the available device values:
+By default, `agent-voice` uses the OS/sounddevice default input and output
+devices. Select a specific microphone or speaker by sounddevice index or name
+when you want to override the system default. Use `doctor --list-devices` to
+find the available device values and see `[default input]` / `[default output]`
+markers:
 
 ```bash
 uv run agent-voice doctor --list-devices

@@ -13,12 +13,14 @@ class FakeProbe(DoctorProbe):
         devices=None,
         existing_paths=None,
         path_sizes=None,
+        default_devices=None,
     ):
         self.commands = commands or {}
         self.packages = packages or set()
         self.devices = devices or []
         self.existing_paths = {Path(path) for path in (existing_paths or set())}
         self.path_sizes = {Path(path): size for path, size in (path_sizes or {}).items()}
+        self.default_devices = default_devices or {}
 
     def find_command(self, command):
         return self.commands.get(command)
@@ -34,6 +36,9 @@ class FakeProbe(DoctorProbe):
 
     def path_size(self, path):
         return self.path_sizes.get(Path(path), 0)
+
+    def default_audio_device(self, kind):
+        return self.default_devices.get(kind)
 
 
 def test_doctor_returns_success_when_required_runtime_checks_pass(capsys):
@@ -107,6 +112,29 @@ def test_doctor_can_list_audio_devices(capsys):
     assert "Audio devices:" in output
     assert "Mic" in output
     assert "Speaker" in output
+
+
+def test_doctor_marks_default_audio_devices(capsys):
+    probe = FakeProbe(
+        commands={"codex": "/usr/bin/codex"},
+        packages={"pexpect", "faster_whisper", "kokoro_onnx", "pipecat", "sounddevice"},
+        devices=[
+            {"name": "iPhone Microphone", "max_input_channels": 1, "max_output_channels": 0},
+            {"name": "WH-1000XM5", "max_input_channels": 1, "max_output_channels": 0},
+            {"name": "WH-1000XM5", "max_input_channels": 0, "max_output_channels": 2},
+        ],
+        default_devices={"input": 1, "output": 2},
+    )
+
+    exit_code = run_doctor(
+        DoctorOptions(agent="codex", list_devices=True),
+        probe=probe,
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "1: WH-1000XM5 (in=1, out=0) [default input]" in output
+    assert "2: WH-1000XM5 (in=0, out=2) [default output]" in output
 
 
 def test_doctor_warns_when_kokoro_cache_files_are_too_small(capsys):

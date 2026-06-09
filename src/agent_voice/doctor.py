@@ -37,6 +37,9 @@ class DoctorProbe(Protocol):
     def path_size(self, path: Path) -> int:
         """Return the runtime asset size in bytes, or 0 when unavailable."""
 
+    def default_audio_device(self, kind: str) -> int | None:
+        """Return the default sounddevice index for 'input' or 'output'."""
+
 
 class SystemDoctorProbe:
     def find_command(self, command: str) -> str | None:
@@ -50,6 +53,16 @@ class SystemDoctorProbe:
 
         devices = sd.query_devices()
         return list(devices)
+
+    def default_audio_device(self, kind: str) -> int | None:
+        import sounddevice as sd
+
+        try:
+            default_device = sd.query_devices(kind=kind)
+            devices = list(sd.query_devices())
+        except Exception:
+            return None
+        return _match_audio_device_index(devices, default_device, kind)
 
     def path_exists(self, path: Path) -> bool:
         return path.exists()
@@ -144,7 +157,12 @@ def run_doctor(
         print(f"[{result.status}] {result.name}: {result.detail}", file=output)
 
     if options.list_devices:
-        _print_audio_devices(devices, output)
+        _print_audio_devices(
+            devices,
+            output,
+            default_input=probe.default_audio_device("input"),
+            default_output=probe.default_audio_device("output"),
+        )
 
     ok_count = sum(1 for result in results if result.status == "ok")
     warn_count = sum(1 for result in results if result.status == "warn")
@@ -266,6 +284,9 @@ def _check_deep_readiness(options: DoctorOptions) -> CheckResult:
 def _print_audio_devices(
     devices: Sequence[Mapping[str, Any]],
     output: TextIO,
+    *,
+    default_input: int | None = None,
+    default_output: int | None = None,
 ) -> None:
     print("Audio devices:", file=output)
     if not devices:
@@ -278,6 +299,37 @@ def _print_audio_devices(
         output_channels = _device_channels(device, "max_output_channels")
         print(
             f"  {index}: {name} "
-            f"(in={input_channels}, out={output_channels})",
+            f"(in={input_channels}, out={output_channels})"
+            f"{_default_device_label(index, default_input, default_output)}",
             file=output,
         )
+
+
+def _default_device_label(
+    index: int,
+    default_input: int | None,
+    default_output: int | None,
+) -> str:
+    labels: list[str] = []
+    if index == default_input:
+        labels.append("default input")
+    if index == default_output:
+        labels.append("default output")
+    if not labels:
+        return ""
+    return " [" + ", ".join(labels) + "]"
+
+
+def _match_audio_device_index(
+    devices: Sequence[Mapping[str, Any]],
+    default_device: Mapping[str, Any],
+    kind: str,
+) -> int | None:
+    channel_key = "max_input_channels" if kind == "input" else "max_output_channels"
+    default_name = default_device.get("name")
+    for index, device in enumerate(devices):
+        if device.get("name") != default_name:
+            continue
+        if _device_channels(device, channel_key) > 0:
+            return index
+    return None

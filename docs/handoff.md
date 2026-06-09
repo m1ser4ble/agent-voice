@@ -160,7 +160,9 @@ uv run agent-voice pi -c
 uv run agent-voice --text pi -c
 ```
 
-Audio device selection is available before the target:
+Audio device selection is available before the target. Without an explicit
+device, runtime uses the OS/sounddevice default input and output devices.
+`doctor --list-devices` marks those defaults in the device list:
 
 ```bash
 uv run agent-voice doctor --list-devices
