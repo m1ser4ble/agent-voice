@@ -65,7 +65,8 @@ uv run agent-voice doctor --agent none
 download model files; `uv sync` handles Python dependencies, and runtime model
 assets are downloaded by the provider code on first use. If a cached Kokoro
 asset is missing or too small because a download was interrupted/rate-limited,
-runtime will replace it on the next start.
+runtime will replace it on the next start and print download progress to
+stderr.
 
 Voice mode entrypoint:
 

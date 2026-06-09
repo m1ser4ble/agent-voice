@@ -1,6 +1,11 @@
 import pytest
 
-from agent_voice.providers import KokoroSpeaker, ManagedVoiceLoop, _download_if_missing
+from agent_voice.providers import (
+    KokoroSpeaker,
+    ManagedVoiceLoop,
+    StderrDownloadReporter,
+    _download_if_missing,
+)
 
 
 class FakeKokoro:
@@ -112,7 +117,10 @@ def test_download_if_missing_replaces_too_small_existing_asset(tmp_path, monkeyp
     path = tmp_path / "kokoro-v1.0.onnx"
     path.write_bytes(b"<html>rate limited</html>")
 
-    def fake_urlretrieve(url, target):
+    def fake_urlretrieve(url, target, reporthook=None):
+        if reporthook is not None:
+            reporthook(1, 1024, 2048)
+            reporthook(2, 1024, 2048)
         target.write_bytes(b"x" * 2048)
 
     monkeypatch.setattr(
@@ -128,7 +136,7 @@ def test_download_if_missing_replaces_too_small_existing_asset(tmp_path, monkeyp
 def test_download_if_missing_rejects_too_small_download(tmp_path, monkeypatch):
     path = tmp_path / "kokoro-v1.0.onnx"
 
-    def fake_urlretrieve(url, target):
+    def fake_urlretrieve(url, target, reporthook=None):
         target.write_bytes(b"<html>not a model</html>")
 
     monkeypatch.setattr(
@@ -141,3 +149,30 @@ def test_download_if_missing_rejects_too_small_download(tmp_path, monkeypatch):
 
     assert not path.exists()
     assert not (tmp_path / "kokoro-v1.0.onnx.download").exists()
+
+
+def test_download_if_missing_reports_download_progress(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "kokoro-v1.0.onnx"
+
+    def fake_urlretrieve(url, target, reporthook=None):
+        if reporthook is not None:
+            reporthook(1, 1024, 2048)
+            reporthook(2, 1024, 2048)
+        target.write_bytes(b"x" * 2048)
+
+    monkeypatch.setattr(
+        "agent_voice.providers.urllib.request.urlretrieve",
+        fake_urlretrieve,
+    )
+
+    _download_if_missing(
+        "https://example.invalid/model.onnx",
+        path,
+        min_bytes=1024,
+        reporter=StderrDownloadReporter(),
+    )
+
+    stderr = capsys.readouterr().err
+    assert "Downloading kokoro-v1.0.onnx" in stderr
+    assert "kokoro-v1.0.onnx: 100%" in stderr
+    assert "Downloaded kokoro-v1.0.onnx" in stderr

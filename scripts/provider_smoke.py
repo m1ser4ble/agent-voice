@@ -13,7 +13,7 @@ from agent_voice.providers import (
     KOKORO_MODEL_URL,
     KOKORO_VOICES_MIN_BYTES,
     KOKORO_VOICES_URL,
-    _asset_has_expected_size,
+    StderrDownloadReporter,
     _download_if_missing,
 )
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
@@ -30,9 +30,12 @@ def download_if_missing(url: str, path: Path) -> None:
         if path.name.endswith(".onnx")
         else KOKORO_VOICES_MIN_BYTES
     )
-    if not _asset_has_expected_size(path, min_bytes):
-        print(f"downloading {path.name}")
-    _download_if_missing(url, path, min_bytes=min_bytes)
+    _download_if_missing(
+        url,
+        path,
+        min_bytes=min_bytes,
+        reporter=StderrDownloadReporter(),
+    )
 
 
 async def main() -> None:

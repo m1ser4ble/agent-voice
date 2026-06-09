@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import queue
+import sys
 import threading
 import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TextIO
 
 from agent_voice.adapter import Agent, PexpectAgent
 from agent_voice.loop import CollectOutput, VoiceLoop
@@ -37,6 +38,92 @@ class AudioPlayer(Protocol):
 class Closeable(Protocol):
     def close(self) -> None:
         """Release owned resources."""
+
+
+class DownloadReporter(Protocol):
+    def invalid_cached_asset(self, path: Path, size: int, min_bytes: int) -> None:
+        """Report that an existing cached file cannot be reused."""
+
+    def download_start(self, path: Path, url: str) -> None:
+        """Report that a download is starting."""
+
+    def download_progress(
+        self,
+        path: Path,
+        block_count: int,
+        block_size: int,
+        total_size: int,
+    ) -> None:
+        """Report download progress from urllib's reporthook."""
+
+    def download_complete(self, path: Path, size: int) -> None:
+        """Report that a download finished and passed validation."""
+
+
+class NullDownloadReporter:
+    def invalid_cached_asset(self, path: Path, size: int, min_bytes: int) -> None:
+        return None
+
+    def download_start(self, path: Path, url: str) -> None:
+        return None
+
+    def download_progress(
+        self,
+        path: Path,
+        block_count: int,
+        block_size: int,
+        total_size: int,
+    ) -> None:
+        return None
+
+    def download_complete(self, path: Path, size: int) -> None:
+        return None
+
+
+class StderrDownloadReporter:
+    def __init__(self, output: TextIO | None = None) -> None:
+        self.output = output
+        self._last_percent_by_path: dict[Path, int] = {}
+
+    def invalid_cached_asset(self, path: Path, size: int, min_bytes: int) -> None:
+        print(
+            f"Cached asset {path.name} is too small "
+            f"({size} bytes; expected at least {min_bytes}); re-downloading.",
+            file=self._output,
+        )
+
+    def download_start(self, path: Path, url: str) -> None:
+        print(f"Downloading {path.name} from {url}", file=self._output)
+
+    def download_progress(
+        self,
+        path: Path,
+        block_count: int,
+        block_size: int,
+        total_size: int,
+    ) -> None:
+        if total_size <= 0:
+            return
+
+        downloaded = min(block_count * block_size, total_size)
+        percent = int(downloaded * 100 / total_size)
+        last_percent = self._last_percent_by_path.get(path, -10)
+        if percent < 100 and percent < last_percent + 10:
+            return
+
+        self._last_percent_by_path[path] = percent
+        print(
+            f"{path.name}: {percent}% ({_format_bytes(downloaded)} / "
+            f"{_format_bytes(total_size)})",
+            file=self._output,
+        )
+
+    def download_complete(self, path: Path, size: int) -> None:
+        print(f"Downloaded {path.name} ({_format_bytes(size)}).", file=self._output)
+
+    @property
+    def _output(self) -> TextIO:
+        return self.output or sys.stderr
 
 
 @dataclass
@@ -73,15 +160,18 @@ class KokoroSpeaker:
 
         model_path = cache_dir / "kokoro-v1.0.onnx"
         voices_path = cache_dir / "voices-v1.0.bin"
+        reporter = StderrDownloadReporter()
         _download_if_missing(
             KOKORO_MODEL_URL,
             model_path,
             min_bytes=KOKORO_MODEL_MIN_BYTES,
+            reporter=reporter,
         )
         _download_if_missing(
             KOKORO_VOICES_URL,
             voices_path,
             min_bytes=KOKORO_VOICES_MIN_BYTES,
+            reporter=reporter,
         )
         return cls(
             kokoro=Kokoro(str(model_path), str(voices_path)),
@@ -306,18 +396,34 @@ def build_local_voice_loop(
     return ManagedVoiceLoop(loop=loop, agent=agent, closeables=(transcript_source,))
 
 
-def _download_if_missing(url: str, path: Path, *, min_bytes: int = 1) -> None:
+def _download_if_missing(
+    url: str,
+    path: Path,
+    *,
+    min_bytes: int = 1,
+    reporter: DownloadReporter | None = None,
+) -> None:
+    reporter = reporter or NullDownloadReporter()
     if _asset_has_expected_size(path, min_bytes):
         return
 
     if path.exists():
+        size = path.stat().st_size
+        reporter.invalid_cached_asset(path, size, min_bytes)
         path.unlink()
 
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.download")
     temp_path.unlink(missing_ok=True)
     try:
-        urllib.request.urlretrieve(url, temp_path)
+        reporter.download_start(path, url)
+        urllib.request.urlretrieve(
+            url,
+            temp_path,
+            reporthook=lambda block_count, block_size, total_size: (
+                reporter.download_progress(path, block_count, block_size, total_size)
+            ),
+        )
         if not _asset_has_expected_size(temp_path, min_bytes):
             size = temp_path.stat().st_size if temp_path.exists() else 0
             raise RuntimeError(
@@ -326,6 +432,7 @@ def _download_if_missing(url: str, path: Path, *, min_bytes: int = 1) -> None:
                 "The download may have been interrupted or rate-limited."
             )
         temp_path.replace(path)
+        reporter.download_complete(path, path.stat().st_size)
     except Exception:
         temp_path.unlink(missing_ok=True)
         raise
@@ -336,3 +443,11 @@ def _asset_has_expected_size(path: Path, min_bytes: int) -> bool:
         return path.is_file() and path.stat().st_size >= min_bytes
     except OSError:
         return False
+
+
+def _format_bytes(size: int) -> str:
+    if size >= 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f} MB"
+    if size >= 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size} B"
