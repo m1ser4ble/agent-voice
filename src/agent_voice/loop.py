@@ -5,6 +5,8 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
+import re
 from typing import Literal, Protocol
 
 from agent_voice.adapter import Agent
@@ -45,6 +47,7 @@ VoiceLoopEventKind = Literal[
     "exit",
     "queued_transcript",
     "ignored_transcript",
+    "ignored_self_echo",
 ]
 
 
@@ -68,6 +71,14 @@ DEFAULT_EXIT_PHRASES = (
     "stop agent voice",
 )
 
+SELF_ECHO_TEXT_RE = re.compile(r"[^0-9A-Za-z가-힣]+")
+
+
+@dataclass(frozen=True)
+class RecentSpeech:
+    text: str
+    expires_at: float
+
 
 @dataclass
 class VoiceLoop:
@@ -82,8 +93,16 @@ class VoiceLoop:
     observer: VoiceLoopObserver | None = None
     speech_poll_interval_seconds: float = 0.05
     speech_join_timeout_seconds: float = 1.0
+    self_echo_window_seconds: float = 8.0
+    self_echo_similarity_threshold: float = 0.68
+    self_echo_token_overlap_threshold: float = 0.78
     should_exit: bool = field(default=False, init=False)
     _pending_transcripts: deque[Transcript] = field(
+        default_factory=deque,
+        init=False,
+        repr=False,
+    )
+    _recent_speech: deque[RecentSpeech] = field(
         default_factory=deque,
         init=False,
         repr=False,
@@ -132,6 +151,9 @@ class VoiceLoop:
 
         self._emit("transcript", transcript.text, source=transcript.source)
 
+        if self._ignore_self_echo(transcript):
+            return True
+
         if self._should_exit(transcript.text):
             self._emit("exit", transcript.text, source=transcript.source)
             self.speaker.stop()
@@ -157,6 +179,7 @@ class VoiceLoop:
         summary = self.presenter.summarize(raw_output, prompt=transcript.text)
         if summary:
             self._emit("speech_summary", summary)
+            self._remember_spoken_text(summary)
             self._speak_interruptibly(summary)
         elif self.session.state is SessionState.SPEAKING:
             self.session.tts_finished()
@@ -194,6 +217,9 @@ class VoiceLoop:
 
         self._emit("transcript", transcript.text, source=transcript.source)
 
+        if self._ignore_self_echo(transcript):
+            return False
+
         if self._should_exit(transcript.text):
             self._emit("exit", transcript.text, source=transcript.source)
             self.speaker.stop()
@@ -225,6 +251,63 @@ class VoiceLoop:
     def _should_exit(self, transcript: str) -> bool:
         normalized = transcript.casefold()
         return any(phrase.casefold() in normalized for phrase in self.exit_phrases)
+
+    def _ignore_self_echo(self, transcript: Transcript) -> bool:
+        if not self._is_recent_self_echo(transcript):
+            return False
+        self._emit("ignored_self_echo", transcript.text, source=transcript.source)
+        return True
+
+    def _remember_spoken_text(self, text: str) -> None:
+        normalized = self._normalize_self_echo_text(text)
+        if not normalized:
+            return
+        self._forget_expired_spoken_text()
+        self._recent_speech.append(
+            RecentSpeech(
+                text=normalized,
+                expires_at=time.monotonic() + self.self_echo_window_seconds,
+            )
+        )
+
+    def _is_recent_self_echo(self, transcript: Transcript) -> bool:
+        if transcript.source == "keyboard":
+            return False
+
+        normalized = self._normalize_self_echo_text(transcript.text)
+        if not normalized:
+            return False
+
+        self._forget_expired_spoken_text()
+        return any(
+            self._looks_like_spoken_text_echo(normalized, speech.text)
+            for speech in self._recent_speech
+        )
+
+    def _looks_like_spoken_text_echo(self, transcript: str, spoken: str) -> bool:
+        if transcript in spoken or spoken in transcript:
+            return True
+
+        if (
+            SequenceMatcher(None, transcript, spoken).ratio()
+            >= self.self_echo_similarity_threshold
+        ):
+            return True
+
+        transcript_tokens = set(transcript.split())
+        if not transcript_tokens:
+            return False
+        spoken_tokens = set(spoken.split())
+        overlap = len(transcript_tokens & spoken_tokens) / len(transcript_tokens)
+        return overlap >= self.self_echo_token_overlap_threshold
+
+    def _forget_expired_spoken_text(self) -> None:
+        now = time.monotonic()
+        while self._recent_speech and self._recent_speech[0].expires_at <= now:
+            self._recent_speech.popleft()
+
+    def _normalize_self_echo_text(self, text: str) -> str:
+        return SELF_ECHO_TEXT_RE.sub(" ", text.casefold()).strip()
 
     def _next_transcript(
         self,

@@ -39,6 +39,26 @@ class AudioPlayer(Protocol):
         """Stop currently playing audio."""
 
 
+class ChunkedAudioPlayer(AudioPlayer, Protocol):
+    def play_chunks(
+        self,
+        audio: Any,
+        sample_rate: int,
+        *,
+        chunk_size: int,
+        before_play: Callable[[Any], None],
+    ) -> None:
+        """Play audio in chunks, invoking a hook immediately before each chunk."""
+
+
+class EchoCanceller(Protocol):
+    def analyze_render(self, frame: Any) -> None:
+        """Feed played speaker audio as the AEC reverse stream."""
+
+    def process_capture(self, frame: Any) -> Any:
+        """Return microphone capture with render echo reduced."""
+
+
 class Closeable(Protocol):
     def close(self) -> None:
         """Release owned resources."""
@@ -132,6 +152,14 @@ class TerminalVoiceObserver:
                 file=output,
                 flush=True,
             )
+            return
+
+        if event.kind == "ignored_self_echo":
+            print(
+                f"[ignored self echo] {event.text}",
+                file=output,
+                flush=True,
+            )
 
 
 class StderrDownloadReporter:
@@ -189,10 +217,156 @@ class SoundDevicePlayer:
 
         sd.play(audio, sample_rate, blocking=True, device=self.output_device)
 
+    def play_chunks(
+        self,
+        audio: Any,
+        sample_rate: int,
+        *,
+        chunk_size: int,
+        before_play: Callable[[Any], None],
+    ) -> None:
+        import numpy as np
+        import sounddevice as sd
+
+        array = np.asarray(audio, dtype=np.float32)
+        if array.ndim == 1:
+            stream_audio = array.reshape(-1, 1)
+        else:
+            stream_audio = array
+
+        channels = 1 if stream_audio.ndim == 1 else int(stream_audio.shape[1])
+        with sd.OutputStream(
+            samplerate=sample_rate,
+            channels=channels,
+            dtype="float32",
+            device=self.output_device,
+        ) as stream:
+            for start in range(0, len(stream_audio), chunk_size):
+                chunk = stream_audio[start : start + chunk_size]
+                if len(chunk) == 0:
+                    continue
+                before_play(chunk)
+                stream.write(chunk)
+
     def stop(self) -> None:
         import sounddevice as sd
 
         sd.stop()
+
+
+@dataclass
+class LiveKitEchoCanceller:
+    sample_rate: int = 16000
+    frame_ms: int = 10
+    stream_delay_ms: int = 0
+    apm: Any | None = None
+    frame_factory: Any | None = None
+
+    def __post_init__(self) -> None:
+        if self.apm is None or self.frame_factory is None:
+            from livekit import rtc
+
+            if self.apm is None:
+                self.apm = rtc.AudioProcessingModule(
+                    echo_cancellation=True,
+                    noise_suppression=True,
+                    high_pass_filter=True,
+                    auto_gain_control=False,
+                )
+            if self.frame_factory is None:
+                self.frame_factory = rtc.AudioFrame
+        if self.stream_delay_ms:
+            self.apm.set_stream_delay_ms(self.stream_delay_ms)
+
+    def analyze_render(self, frame: Any) -> None:
+        for audio_frame, _sample_count in self._livekit_frames(frame):
+            self.apm.process_reverse_stream(audio_frame)
+
+    def process_capture(self, frame: Any) -> Any:
+        import numpy as np
+
+        outputs = []
+        for audio_frame, sample_count in self._livekit_frames(frame):
+            self.apm.process_stream(audio_frame)
+            processed = np.asarray(audio_frame.data, dtype=np.int16)
+            outputs.append(processed[:sample_count].astype(np.float32) / 32767.0)
+        if not outputs:
+            return np.asarray(frame, dtype=np.float32)
+        return np.concatenate(outputs).astype(np.float32)
+
+    def _livekit_frames(self, frame: Any) -> list[tuple[Any, int]]:
+        import numpy as np
+
+        samples = np.asarray(frame, dtype=np.float32).reshape(-1)
+        if samples.size == 0:
+            return []
+
+        frame_samples = max(1, int(self.sample_rate * self.frame_ms / 1000))
+        livekit_frames = []
+        for start in range(0, len(samples), frame_samples):
+            chunk = samples[start : start + frame_samples]
+            sample_count = int(chunk.size)
+            if sample_count < frame_samples:
+                chunk = np.pad(chunk, (0, frame_samples - sample_count))
+            clipped = np.clip(chunk, -1.0, 1.0)
+            int16_chunk = (clipped * 32767).astype(np.int16)
+            audio_frame = self.frame_factory(
+                bytearray(int16_chunk.tobytes()),
+                self.sample_rate,
+                1,
+                frame_samples,
+            )
+            livekit_frames.append((audio_frame, sample_count))
+        return livekit_frames
+
+
+@dataclass
+class AecAudioPlayer:
+    player: AudioPlayer
+    echo_canceller: EchoCanceller
+    target_sample_rate: int
+    frame_ms: int = 10
+
+    def play(self, audio: Any, sample_rate: int) -> None:
+        output_audio = _float32_audio(audio)
+        chunk_size = max(1, int(sample_rate * self.frame_ms / 1000))
+        play_chunks = getattr(self.player, "play_chunks", None)
+        if play_chunks is None:
+            self._play_chunks_fallback(output_audio, sample_rate, chunk_size)
+            return
+
+        play_chunks(
+            output_audio,
+            sample_rate,
+            chunk_size=chunk_size,
+            before_play=lambda chunk: self._feed_render_reference(chunk, sample_rate),
+        )
+
+    def stop(self) -> None:
+        self.player.stop()
+
+    def _play_chunks_fallback(
+        self,
+        audio: Any,
+        sample_rate: int,
+        chunk_size: int,
+    ) -> None:
+        for start in range(0, len(audio), chunk_size):
+            chunk = audio[start : start + chunk_size]
+            if len(chunk) == 0:
+                continue
+            self._feed_render_reference(chunk, sample_rate)
+            self.player.play(chunk, sample_rate)
+
+    def _feed_render_reference(self, chunk: Any, sample_rate: int) -> None:
+        render = _float32_mono_audio(chunk)
+        render = _resample_mono_audio(
+            render,
+            source_sample_rate=sample_rate,
+            target_sample_rate=self.target_sample_rate,
+        )
+        for frame in _audio_frames(render, self.target_sample_rate, self.frame_ms):
+            self.echo_canceller.analyze_render(frame)
 
 
 @dataclass
@@ -212,6 +386,7 @@ class KokoroSpeaker:
         speed: float = 1.0,
         lang: str = "en-us",
         output_device: int | str | None = None,
+        player: AudioPlayer | None = None,
     ) -> KokoroSpeaker:
         from kokoro_onnx import Kokoro
 
@@ -232,7 +407,7 @@ class KokoroSpeaker:
         )
         return cls(
             kokoro=Kokoro(str(model_path), str(voices_path)),
-            player=SoundDevicePlayer(output_device=output_device),
+            player=player or SoundDevicePlayer(output_device=output_device),
             voice=voice,
             speed=speed,
             lang=lang,
@@ -268,6 +443,7 @@ class SupertonicSpeaker:
         speed: float = 1.0,
         lang: str = "ko",
         output_device: int | str | None = None,
+        player: AudioPlayer | None = None,
     ) -> SupertonicSpeaker:
         from supertonic import TTS
 
@@ -275,7 +451,7 @@ class SupertonicSpeaker:
         sample_rate = int(getattr(tts, "sample_rate", 44100) or 44100)
         return cls(
             tts=tts,
-            player=SoundDevicePlayer(output_device=output_device),
+            player=player or SoundDevicePlayer(output_device=output_device),
             voice=voice,
             speed=speed,
             lang=lang,
@@ -367,6 +543,7 @@ class MicrophoneWhisperTranscriptSource:
         compute_type: str = "int8",
         use_smart_turn: bool = True,
         input_device: int | str | None = None,
+        echo_canceller: EchoCanceller | None = None,
     ) -> None:
         import numpy as np
         import sounddevice as sd
@@ -383,6 +560,7 @@ class MicrophoneWhisperTranscriptSource:
         self.max_utterance_seconds = max_utterance_seconds
         self.whisper_language = whisper_language
         self.use_smart_turn = use_smart_turn
+        self.echo_canceller = echo_canceller
         self._transcripts: queue.Queue[str] = queue.Queue()
         self._audio_chunks: queue.Queue[Any] = queue.Queue()
         self._stop = threading.Event()
@@ -435,6 +613,11 @@ class MicrophoneWhisperTranscriptSource:
                 continue
 
             mono = self._np.asarray(chunk, dtype=self._np.float32).reshape(-1)
+            if self.echo_canceller is not None:
+                mono = self._np.asarray(
+                    self.echo_canceller.process_capture(mono),
+                    dtype=self._np.float32,
+                ).reshape(-1)
             chunk_seconds = len(mono) / self.sample_rate
             rms = float(self._np.sqrt(self._np.mean(mono * mono))) if len(mono) else 0.0
             is_speech = rms >= self.vad_threshold
@@ -571,14 +754,26 @@ def build_local_voice_loop(
     supertonic_voice: str = "M2",
     macos_say_voice: str | None = None,
     macos_say_rate: int | None = None,
+    agent: Agent | None = None,
+    aec_enabled: bool = True,
+    aec_delay_ms: int = 120,
 ) -> ManagedVoiceLoop:
-    agent = PexpectAgent(command=command)
+    agent = agent or PexpectAgent(command=command)
+    echo_canceller = (
+        LiveKitEchoCanceller(
+            sample_rate=sample_rate,
+            stream_delay_ms=max(0, aec_delay_ms),
+        )
+        if aec_enabled
+        else None
+    )
     microphone_source = MicrophoneWhisperTranscriptSource(
         sample_rate=sample_rate,
         vad_threshold=vad_threshold,
         whisper_model=whisper_model,
         whisper_language=whisper_language,
         input_device=input_device,
+        echo_canceller=echo_canceller,
     )
     sources: list[Any] = [microphone_source]
     keyboard_source = _build_keyboard_source(
@@ -599,6 +794,8 @@ def build_local_voice_loop(
             output_device=output_device,
             macos_say_voice=macos_say_voice,
             macos_say_rate=macos_say_rate,
+            echo_canceller=echo_canceller,
+            aec_sample_rate=sample_rate,
         )
     except Exception:
         transcript_source.close()
@@ -619,6 +816,7 @@ def build_local_voice_loop(
         language=language,
         whisper_language=whisper_language,
         tts_backend=resolved_tts_backend,
+        aec_enabled=aec_enabled,
     )
     return ManagedVoiceLoop(
         loop=loop,
@@ -640,6 +838,8 @@ def _build_speaker(
     output_device: int | str | None,
     macos_say_voice: str | None,
     macos_say_rate: int | None,
+    echo_canceller: EchoCanceller | None,
+    aec_sample_rate: int,
 ) -> tuple[Any, str]:
     if backend not in {"auto", "kokoro", "macos-say", "supertonic"}:
         raise ValueError(
@@ -647,12 +847,18 @@ def _build_speaker(
         )
 
     if backend == "auto" and _should_use_supertonic(tts_lang):
+        player = _build_audio_player(
+            output_device=output_device,
+            echo_canceller=echo_canceller,
+            aec_sample_rate=aec_sample_rate,
+        )
         return (
             SupertonicSpeaker.from_cache(
                 voice=supertonic_voice,
                 speed=tts_speed,
                 lang=tts_lang,
                 output_device=output_device,
+                player=player,
             ),
             "supertonic",
         )
@@ -667,12 +873,18 @@ def _build_speaker(
         )
 
     if backend == "supertonic":
+        player = _build_audio_player(
+            output_device=output_device,
+            echo_canceller=echo_canceller,
+            aec_sample_rate=aec_sample_rate,
+        )
         return (
             SupertonicSpeaker.from_cache(
                 voice=supertonic_voice,
                 speed=tts_speed,
                 lang=tts_lang,
                 output_device=output_device,
+                player=player,
             ),
             "supertonic",
         )
@@ -688,6 +900,11 @@ def _build_speaker(
             "macos-say",
         )
 
+    player = _build_audio_player(
+        output_device=output_device,
+        echo_canceller=echo_canceller,
+        aec_sample_rate=aec_sample_rate,
+    )
     return (
         KokoroSpeaker.from_cache(
             cache_dir=cache_dir / "kokoro",
@@ -695,8 +912,25 @@ def _build_speaker(
             speed=tts_speed,
             lang=tts_lang,
             output_device=output_device,
+            player=player,
         ),
         "kokoro",
+    )
+
+
+def _build_audio_player(
+    *,
+    output_device: int | str | None,
+    echo_canceller: EchoCanceller | None,
+    aec_sample_rate: int,
+) -> AudioPlayer:
+    player = SoundDevicePlayer(output_device=output_device)
+    if echo_canceller is None:
+        return player
+    return AecAudioPlayer(
+        player=player,
+        echo_canceller=echo_canceller,
+        target_sample_rate=aec_sample_rate,
     )
 
 
@@ -756,6 +990,57 @@ def _mono_audio(audio: Any) -> Any:
     return array
 
 
+def _float32_mono_audio(audio: Any) -> Any:
+    import numpy as np
+
+    array = np.asarray(audio, dtype=np.float32)
+    if array.ndim == 2:
+        if 1 in array.shape:
+            return array.reshape(-1)
+        return np.mean(array, axis=1).astype(np.float32)
+    return array.reshape(-1)
+
+
+def _float32_audio(audio: Any) -> Any:
+    import numpy as np
+
+    array = np.asarray(audio, dtype=np.float32)
+    if array.ndim == 0:
+        return array.reshape(1)
+    return array
+
+
+def _resample_mono_audio(
+    audio: Any,
+    *,
+    source_sample_rate: int,
+    target_sample_rate: int,
+) -> Any:
+    import numpy as np
+
+    if source_sample_rate == target_sample_rate or len(audio) == 0:
+        return np.asarray(audio, dtype=np.float32)
+
+    duration = len(audio) / float(source_sample_rate)
+    target_length = max(1, int(round(duration * target_sample_rate)))
+    source_positions = np.linspace(0.0, duration, num=len(audio), endpoint=False)
+    target_positions = np.linspace(0.0, duration, num=target_length, endpoint=False)
+    return np.interp(target_positions, source_positions, audio).astype(np.float32)
+
+
+def _audio_frames(audio: Any, sample_rate: int, frame_ms: int) -> list[Any]:
+    import numpy as np
+
+    samples = np.asarray(audio, dtype=np.float32).reshape(-1)
+    frame_samples = max(1, int(sample_rate * frame_ms / 1000))
+    frames = []
+    for start in range(0, len(samples), frame_samples):
+        frame = samples[start : start + frame_samples]
+        if len(frame):
+            frames.append(frame.astype(np.float32))
+    return frames
+
+
 def _build_keyboard_source(
     *,
     enabled: bool,
@@ -782,11 +1067,13 @@ def _build_status_lines(
     language: str,
     whisper_language: str | None,
     tts_backend: str,
+    aec_enabled: bool,
 ) -> tuple[str, ...]:
     lines = [
         f"agent-voice session started: {' '.join(command)}",
         f"summary language: {language}; stt language: {whisper_language or 'auto'}",
         f"tts backend: {tts_backend}",
+        f"aec: {'livekit' if aec_enabled else 'disabled'}",
     ]
     if keyboard_enabled:
         lines.append(

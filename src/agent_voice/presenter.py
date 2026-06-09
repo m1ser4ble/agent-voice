@@ -40,6 +40,7 @@ TERMINAL_UI_PATTERNS = (
 @dataclass(frozen=True)
 class VoicePresenter:
     language: str = "ko"
+    max_conversation_chars: int = 600
 
     def summarize(self, output: str, *, prompt: str | None = None) -> str:
         clean = self._strip_ansi(output).strip()
@@ -138,7 +139,10 @@ class VoicePresenter:
 
         self._append_block(blocks, current_block)
 
-        candidate_blocks = reversed(blocks) if normalized_prompt is not None else blocks
+        if normalized_prompt is not None:
+            return self._render_conversation_blocks(blocks, normalized_prompt)
+
+        candidate_blocks = blocks
         for block in candidate_blocks:
             summary = self._clean_speech_text(" ".join(block))
             summary = self._dedupe_streaming_repeat(summary)
@@ -147,6 +151,23 @@ class VoicePresenter:
             if summary:
                 return summary[:220]
         return ""
+
+    def _render_conversation_blocks(
+        self,
+        blocks: list[list[str]],
+        normalized_prompt: str,
+    ) -> str:
+        rendered_blocks: list[str] = []
+        for block in blocks:
+            summary = self._clean_speech_text(" ".join(block))
+            summary = self._dedupe_streaming_repeat(summary)
+            if self._is_ignored_fallback_line(summary, normalized_prompt):
+                continue
+            if summary:
+                rendered_blocks.append(summary)
+        return self._clean_speech_text(" ".join(rendered_blocks))[
+            : self.max_conversation_chars
+        ]
 
     def _append_block(self, blocks: list[list[str]], block: list[str]) -> None:
         if block:

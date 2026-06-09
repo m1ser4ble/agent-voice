@@ -45,6 +45,9 @@ This repo currently contains the local voice MVP core:
 - `SupertonicSpeaker`: synthesizes Korean presenter output with Supertonic and
   plays it through the local speaker
 - `KokoroSpeaker`: fallback local TTS backend for Kokoro ONNX voices
+- LiveKit/WebRTC AEC: feeds TTS playback into `AudioProcessingModule` as a
+  reverse stream and sends microphone capture through the same processor before
+  VAD/Whisper
 - `agent-voice codex ...`: starts voice mode by default and passes all target
   args through to Codex
 - `agent-voice pi ...`: uses the same pexpect boundary for Pi
@@ -86,6 +89,10 @@ completed transcript, the exact input submitted to Codex/Pi, the raw agent
 output collected from the child process, and the shorter voice summary. Say or
 type `종료` / `exit` to stop the session.
 
+When speaker audio leaks back into the microphone, voice mode may print
+`[ignored while speaking]` for transcripts caught during playback or
+`[ignored self echo]` for delayed transcripts that match text it just spoke.
+
 The default voice preset is `jarvis_style`. With `--tts-backend auto`, Korean
 speech uses Supertonic by default. The bundled `jarvis_style` preset maps to
 Supertonic `M2`, a stock male assistant-style voice; it is not a celebrity or
@@ -124,6 +131,24 @@ default. Override it, for example with `--stt-language en`, when you want to
 speak another language.
 Use `--quiet-agent-io` to hide terminal transcript/raw-output events, or
 `--no-keyboard` if you want mic-only input.
+LiveKit/WebRTC echo cancellation is enabled by default for Supertonic/Kokoro
+playback paths. TTS playback is streamed in 10 ms chunks so the AEC reverse
+stream is fed in playback order, and microphone capture is processed through
+the same APM before VAD/Whisper. Use `--aec-delay-ms <ms>` to tune estimated
+speaker-to-microphone delay, or `--no-aec` to disable it while tuning devices.
+
+Experimental Codex app-server backend:
+
+```bash
+uv run agent-voice --agent-backend codex-app-server codex
+uv run agent-voice --agent-backend codex-app-server --text --once "OK 라고만 답해" codex
+```
+
+This backend starts `codex app-server` and reads JSON-RPC agent events instead
+of scraping the terminal TUI. It currently renders assistant-message and
+file-change events into the existing presenter path while ignoring command
+execution lifecycle noise. It is an MVP for comparing output quality before
+replacing the pexpect backend.
 
 By default, `agent-voice` uses the OS/sounddevice default input and output
 devices. Select a specific microphone or speaker by sounddevice index or name

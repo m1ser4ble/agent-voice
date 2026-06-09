@@ -7,7 +7,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Protocol, TextIO
 
-from agent_voice.adapter import Agent, PexpectAgent
+from agent_voice.adapter import Agent, CodexAppServerAgent, PexpectAgent
 from agent_voice.doctor import DoctorProbe, build_doctor_parser, run_doctor
 from agent_voice.interrupt import VoiceSession
 from agent_voice.loop import VoiceLoop
@@ -113,7 +113,7 @@ def _run_target(
             output=output,
         )
 
-    factory = agent_factory or (lambda command: PexpectAgent(command=command))
+    factory = agent_factory or (lambda command: _build_agent(command, args))
     agent = factory(command)
     presenter = VoicePresenter(language=args.language)
     session = VoiceSession()
@@ -202,6 +202,9 @@ def _build_default_voice_loop(
             supertonic_voice=args.supertonic_voice,
             macos_say_voice=args.macos_say_voice,
             macos_say_rate=args.macos_say_rate,
+            agent=_build_agent(command, args),
+            aec_enabled=not args.no_aec,
+            aec_delay_ms=args.aec_delay_ms,
         )
     except (ImportError, ModuleNotFoundError) as error:
         raise VoiceModeUnavailableError(
@@ -243,6 +246,16 @@ def _build_agent_command(target: str, agent_args: Sequence[str]) -> tuple[str, .
     if not command[0]:
         raise ValueError("agent command must not be empty")
     return command
+
+
+def _build_agent(command: tuple[str, ...], args: argparse.Namespace) -> Agent:
+    if args.agent_backend == "pexpect":
+        return PexpectAgent(command=command)
+    if args.agent_backend == "codex-app-server":
+        if command[0] != "codex":
+            raise ValueError("codex-app-server backend can only be used with codex")
+        return CodexAppServerAgent(command=command)
+    raise ValueError(f"unknown agent backend: {args.agent_backend}")
 
 
 def _submit_once(
@@ -440,6 +453,29 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not print transcript, agent input/output, and summary events.",
     )
+    parser.add_argument(
+        "--no-aec",
+        action="store_true",
+        help="Disable LiveKit/WebRTC echo cancellation for local TTS playback.",
+    )
+    parser.add_argument(
+        "--aec-delay-ms",
+        type=int,
+        default=120,
+        help=(
+            "Estimated speaker-to-microphone delay for LiveKit/WebRTC AEC. "
+            "Tune this if the assistant still hears itself."
+        ),
+    )
+    parser.add_argument(
+        "--agent-backend",
+        choices=("pexpect", "codex-app-server"),
+        default="pexpect",
+        help=(
+            "Agent control backend. 'codex-app-server' uses Codex JSON-RPC "
+            "events instead of scraping the terminal TUI."
+        ),
+    )
 
     parser.add_argument(
         "target",
@@ -472,7 +508,8 @@ def _collect_agent_output(
             empty_reads = 0
         else:
             empty_reads += 1
-            if chunks and empty_reads >= idle_reads:
+            turn_active = getattr(agent, "is_turn_active", lambda: False)()
+            if chunks and empty_reads >= idle_reads and not turn_active:
                 break
 
         if poll_interval > 0:

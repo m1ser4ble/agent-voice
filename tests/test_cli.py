@@ -187,16 +187,23 @@ def test_cli_voice_mode_accepts_keyboard_and_transparency_controls():
     captured_flags = []
 
     exit_code = main(
-        ["--no-keyboard", "--quiet-agent-io", "codex"],
+        ["--no-keyboard", "--quiet-agent-io", "--no-aec", "--aec-delay-ms", "120", "codex"],
         voice_loop_factory=lambda _, args: (
-            captured_flags.append((args.no_keyboard, args.quiet_agent_io))
+            captured_flags.append(
+                (
+                    args.no_keyboard,
+                    args.quiet_agent_io,
+                    args.no_aec,
+                    args.aec_delay_ms,
+                )
+            )
             or voice_loop
         ),
         output=StringIO(),
     )
 
     assert exit_code == 0
-    assert captured_flags == [(True, True)]
+    assert captured_flags == [(True, True, True, 120)]
 
 
 def test_cli_voice_mode_accepts_tts_backend_controls():
@@ -375,6 +382,35 @@ def test_cli_pi_text_once_uses_pi_target_with_passthrough_args():
     assert agent.submitted == ["테스트는?"]
 
 
+def test_cli_codex_app_server_backend_uses_structured_codex_agent(monkeypatch):
+    created_commands = []
+
+    class FakeCodexAppServerAgent(FakeAgent):
+        def __init__(self, command):
+            super().__init__()
+            created_commands.append(command)
+
+    monkeypatch.setattr(
+        "agent_voice.cli.CodexAppServerAgent",
+        FakeCodexAppServerAgent,
+    )
+
+    exit_code = main(
+        [
+            "--agent-backend",
+            "codex-app-server",
+            "--text",
+            "--once",
+            "테스트는?",
+            "codex",
+        ],
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert created_commands == [("codex",)]
+
+
 def test_cli_agent_options_after_target_are_not_parsed_as_product_options():
     voice_loop = FakeVoiceLoop()
     captured_commands = []
@@ -413,6 +449,41 @@ def test_collect_agent_output_waits_for_first_output_then_stops_after_idle_reads
             "late output that should not be read",
         ]
     )
+
+    output = _collect_agent_output(
+        agent,
+        idle_reads=2,
+        max_reads=10,
+        poll_interval=0,
+    )
+
+    assert output == "Modified:\n- auth.py\nTests:\n1 passed\n"
+
+
+class ActiveTurnFakeAgent:
+    def __init__(self):
+        self.reads = 0
+        self.chunks = [
+            "Modified:\n- auth.py\n",
+            "",
+            "",
+            "Tests:\n1 passed\n",
+            "",
+            "",
+        ]
+
+    def read_available(self):
+        self.reads += 1
+        if not self.chunks:
+            return ""
+        return self.chunks.pop(0)
+
+    def is_turn_active(self):
+        return self.reads < 4
+
+
+def test_collect_agent_output_waits_through_idle_reads_while_turn_is_active():
+    agent = ActiveTurnFakeAgent()
 
     output = _collect_agent_output(
         agent,

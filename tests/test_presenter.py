@@ -57,6 +57,30 @@ def test_presenter_skips_polite_echoed_prompt_when_falling_back_to_agent_text():
     assert summary == "감사합니다! 필요하시면 언제든 다시 불러주세요."
 
 
+def test_presenter_preserves_multiblock_conversational_clarification():
+    output = """
+문장이 좀 깨진 것 같습니다. 아마 이렇게 말하려던 걸까요?
+
+“AI 에이전트를 잘 몰라서, AI 에이전트 사용을 연습하고 있습니다.”
+
+또는 더 자연스럽게:
+
+“AI 에이전트를 잘 몰라서 사용법을 연습 중입니다.”
+"""
+
+    summary = VoicePresenter(language="ko").summarize(
+        output,
+        prompt="A 전투로 못하러서 A 전투로 잘 연습습니다.",
+    )
+
+    assert summary == (
+        "문장이 좀 깨진 것 같습니다. 아마 이렇게 말하려던 걸까요? "
+        "“AI 에이전트를 잘 몰라서, AI 에이전트 사용을 연습하고 있습니다.” "
+        "또는 더 자연스럽게: "
+        "“AI 에이전트를 잘 몰라서 사용법을 연습 중입니다.”"
+    )
+
+
 def test_presenter_skips_pi_startup_and_terminal_status_noise():
     output = """
  pi v0.78.1

@@ -348,6 +348,41 @@ def test_voice_loop_polls_for_interrupts_while_speech_is_playing():
     ]
 
 
+def test_voice_loop_filters_self_echo_before_interrupts_while_speaking():
+    speaker = BlockingSpeaker(timeout=0.01)
+    spoken_text = "잠깐 명령은 재생을 멈춥니다. 지금은 안내 문장을 읽고 있습니다."
+    source = InterruptDuringSpeechSource(
+        first_transcript="안내해줘",
+        interrupt_transcript=Transcript(
+            "잠깐 명령은 재생을 멈춥니다",
+            source="microphone",
+        ),
+        speaking_started=speaker.started,
+    )
+    agent = FakeAgent(spoken_text)
+    observer = FakeObserver()
+    session = VoiceSession()
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        session=session,
+        interrupt=InterruptManager(stop_phrases=("잠깐",)),
+        collect_output=lambda agent: agent.read_available(),
+        observer=observer,
+    )
+
+    handled = loop.run_once()
+
+    assert handled is True
+    assert agent.submitted == ["안내해줘"]
+    assert speaker.stops == 0
+    assert session.state is SessionState.LISTENING
+    assert SessionState.INTERRUPTED not in session.history
+    assert [event.kind for event in observer.events].count("ignored_self_echo") == 1
+
+
 def test_voice_loop_ignores_non_interrupt_transcripts_while_speaking():
     speaker = BlockingSpeaker(timeout=0.01)
     source = InterruptDuringSpeechSource(
@@ -412,3 +447,122 @@ def test_voice_loop_queues_keyboard_transcripts_that_arrive_while_speaking():
         "테스트 2개는 모두 통과했습니다.",
     ]
     assert any(event.kind == "queued_transcript" for event in observer.events)
+
+
+def test_voice_loop_ignores_recent_spoken_text_that_arrives_after_speech_finishes():
+    spoken_text = "첫 번째 안내 문장입니다. 두 번째 안내 문장은 다시 입력되면 안 됩니다."
+    delayed_echo = "두 번째 안내 문장은 다시 입력되면 안 됩니다."
+    source = FakeTranscriptSource(
+        [
+            Transcript("처음 요청", source="microphone"),
+            Transcript(delayed_echo, source="microphone"),
+            Transcript("다음 요청", source="microphone"),
+        ]
+    )
+    agent = FakeAgent([spoken_text, "Tests:\n1 passed\n"])
+    speaker = FakeSpeaker()
+    observer = FakeObserver()
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        collect_output=lambda agent: agent.read_available(),
+        observer=observer,
+    )
+
+    handled_count = loop.run_until_idle()
+
+    assert handled_count == 3
+    assert agent.submitted == [
+        "처음 요청",
+        "다음 요청",
+    ]
+    assert [event.kind for event in observer.events].count("ignored_self_echo") == 1
+
+
+def test_voice_loop_ignores_partial_recent_spoken_text():
+    spoken_text = "첫 부분은 설명이고 마지막 부분은 다시 입력되면 안 됩니다."
+    delayed_echo = "마지막 부분은 다시 입력되면 안 됩니다."
+    source = FakeTranscriptSource(
+        [
+            Transcript("시작", source="microphone"),
+            Transcript(delayed_echo, source="microphone"),
+        ]
+    )
+    agent = FakeAgent(spoken_text)
+    speaker = FakeSpeaker()
+    observer = FakeObserver()
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        collect_output=lambda agent: agent.read_available(),
+        observer=observer,
+    )
+
+    handled_count = loop.run_until_idle()
+
+    assert handled_count == 2
+    assert agent.submitted == ["시작"]
+    assert [event.kind for event in observer.events].count("ignored_self_echo") == 1
+
+
+def test_voice_loop_filters_self_echo_before_exit_detection():
+    spoken_text = "종료 명령은 세션을 끝냅니다. 이 문장은 안내입니다."
+    delayed_echo = "종료 명령은 세션을 끝냅니다."
+    source = FakeTranscriptSource(
+        [
+            Transcript("안내해줘", source="microphone"),
+            Transcript(delayed_echo, source="microphone"),
+            Transcript("다음 작업", source="microphone"),
+        ]
+    )
+    agent = FakeAgent([spoken_text, "Tests:\n1 passed\n"])
+    speaker = FakeSpeaker()
+    observer = FakeObserver()
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        collect_output=lambda agent: agent.read_available(),
+        observer=observer,
+    )
+
+    handled_count = loop.run_until_idle()
+
+    assert handled_count == 3
+    assert loop.should_exit is False
+    assert agent.submitted == ["안내해줘", "다음 작업"]
+    assert [event.kind for event in observer.events].count("ignored_self_echo") == 1
+
+
+def test_voice_loop_does_not_treat_keyboard_input_as_self_echo():
+    repeated_text = "두 번째 안내 문장은 다시 입력되면 안 됩니다."
+    source = FakeTranscriptSource(
+        [
+            Transcript("처음 요청", source="microphone"),
+            Transcript(repeated_text, source="keyboard"),
+        ]
+    )
+    agent = FakeAgent(
+        [
+            "첫 번째 안내 문장입니다. 두 번째 안내 문장은 다시 입력되면 안 됩니다.",
+            "Tests:\n1 passed\n",
+        ]
+    )
+    speaker = FakeSpeaker()
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        collect_output=lambda agent: agent.read_available(),
+    )
+
+    handled_count = loop.run_until_idle()
+
+    assert handled_count == 2
+    assert agent.submitted == ["처음 요청", repeated_text]

@@ -75,10 +75,10 @@ flowchart LR
 | --- | --- | --- |
 | `TranscriptSource` | Supplies completed user utterances from text, Whisper, keyboard input, or another input provider. | Protocol implemented in `loop.py`; `MicrophoneWhisperTranscriptSource`, `KeyboardTranscriptSource`, and `MergedTranscriptSource` implemented in `providers.py`. Real-device tuning still needed. |
 | `VoiceLoop` | Coordinates transcript handling, agent submission, output collection, presentation, speaking, terminal visibility events, and interruption. | Implemented as a test-backed runtime loop and wired to the default CLI voice path. Speech playback runs in the background while the loop polls for interrupt transcripts. |
-| `AgentAdapter` | Starts a coding agent, sends user input, and reads available agent output. | Implemented as `PexpectAgent`; Codex and Pi both use opaque target-argument passthrough. |
+| `AgentAdapter` | Starts a coding agent, sends user input, and reads available agent output. | Implemented as `PexpectAgent` plus an experimental `CodexAppServerAgent`; Pi still uses opaque target-argument passthrough. |
 | `VoicePresenter` | Converts raw agent output into short speech-ready summaries. | Implemented as rule-based summaries. |
 | `VoiceLoopObserver` | Emits transparent runtime events such as transcript, agent input, raw agent output, and speech summary. | Implemented in `loop.py` as an event callback contract; `TerminalVoiceObserver` renders it in the default provider. |
-| `Speaker` | Speaks presenter output and supports `stop()` for barge-in. Kokoro is the intended default TTS backend. | Protocol implemented in `loop.py`; `KokoroSpeaker` implemented in `providers.py` using Kokoro ONNX plus `sounddevice`. Real-device tuning still needed. |
+| `Speaker` | Speaks presenter output and supports `stop()` for barge-in. Kokoro is the intended default TTS backend. | Protocol implemented in `loop.py`; Supertonic/Kokoro speakers use `sounddevice`, and can feed LiveKit/WebRTC APM as an AEC reverse stream before playback. Real-device tuning still needed. |
 | `VoicePresetConfig` | Resolves named TTS presets into provider settings such as voice, language/accent, and speech speed. | Implemented through bundled `voice_presets.toml`, optional `--voice-config`, `--voice-preset`, and explicit `--tts-*` CLI overrides. |
 | `InterruptManager` | Decides whether a transcript should interrupt speech in the current state. | Implemented and wired into `VoiceLoop` and default CLI voice runtime. |
 | `VoiceSession` | Tracks `LISTENING`, `THINKING`, `SPEAKING`, and `INTERRUPTED`. | Implemented. |
@@ -308,20 +308,21 @@ thread and continues polling `TranscriptSource` while the session is
 loop calls `speaker.stop()`, transitions through `INTERRUPTED`, and resumes
 `LISTENING`.
 
-Non-interrupt microphone transcripts observed while `SPEAKING` are ignored for
-now. That is intentional: without echo cancellation and stronger intent
-detection, queuing ordinary speech during TTS can feed the system's own spoken
-summary back into the coding agent as a new command. Keyboard transcripts are
-different because they cannot be TTS echo; those are queued and submitted on the
-next turn after speech finishes.
+Supertonic/Kokoro playback also feeds synthesized PCM into LiveKit/WebRTC
+`AudioProcessingModule.process_reverse_stream()`, while microphone capture is
+processed through `process_stream()` before VAD/Whisper. Non-interrupt
+microphone transcripts observed while `SPEAKING` are still ignored as a second
+guard against feeding the system's own spoken summary back into the coding agent
+as a new command. Keyboard transcripts are different because they cannot be TTS
+echo; those are queued and submitted on the next turn after speech finishes.
 
 The current provider implementation wires `MicrophoneWhisperTranscriptSource`
 and `KeyboardTranscriptSource` through `MergedTranscriptSource`, then connects
-that source and `KokoroSpeaker` into the default CLI voice path. The terminal
-observer prints completed transcripts, exact agent input, raw agent output, and
-the speech summary so the wrapper does not hide the underlying Codex/Pi
-session. The next step is real hardware E2E tuning: mic thresholds, echo
-behavior, Kokoro language/voice quality, latency, and clearer doctor checks.
+that source and the selected speaker into the default CLI voice path. The
+terminal observer prints completed transcripts, exact agent input, raw agent
+output, and the speech summary so the wrapper does not hide the underlying
+Codex/Pi session. The next step is real hardware E2E tuning: mic thresholds,
+AEC delay, TTS language/voice quality, latency, and clearer doctor checks.
 
 Current shape:
 
@@ -359,8 +360,8 @@ Voice mode accepts two input paths by default:
 
 Both paths enter the same `VoiceLoop`. If a typed command arrives while TTS is
 speaking, it is queued for the next turn. Non-interrupt microphone transcripts
-during speech are still ignored to avoid echoing the spoken summary back into
-the agent.
+during speech are still ignored after LiveKit/WebRTC AEC as a conservative
+guard against echo leakage.
 
 The loop should own this decision:
 
@@ -402,11 +403,23 @@ non-interrupt transcripts during playback.
 
 ### Codex
 
-Codex is currently controlled through `PexpectAgent`.
+Codex is controlled through `PexpectAgent` by default.
 
 ```bash
 uv run agent-voice codex
 ```
+
+An experimental structured backend can use Codex app-server JSON-RPC events:
+
+```bash
+uv run agent-voice --agent-backend codex-app-server codex
+uv run agent-voice --agent-backend codex-app-server --text --once "OK 라고만 답해" codex
+```
+
+The app-server backend starts `codex app-server`, initializes a thread, submits
+turns with `turn/start`, and renders assistant-message plus file-change events
+into the existing presenter path. Command lifecycle events are intentionally not
+rendered as speech by default.
 
 This command starts the default voice mode. The text debug path is:
 

@@ -5,8 +5,10 @@ from pathlib import Path
 import pytest
 
 from agent_voice.providers import (
+    AecAudioPlayer,
     KeyboardTranscriptSource,
     KokoroSpeaker,
+    LiveKitEchoCanceller,
     MacOSSaySpeaker,
     ManagedVoiceLoop,
     MergedTranscriptSource,
@@ -53,6 +55,61 @@ class FakeAudioPlayer:
 
     def stop(self):
         self.stops += 1
+
+
+class FakeChunkedAudioPlayer(FakeAudioPlayer):
+    def __init__(self, events):
+        super().__init__()
+        self.events = events
+
+    def play_chunks(self, audio, sample_rate, *, chunk_size, before_play):
+        for start in range(0, len(audio), chunk_size):
+            chunk = audio[start : start + chunk_size]
+            before_play(chunk)
+            self.events.append(("play", len(chunk)))
+            self.plays.append((chunk, sample_rate))
+
+
+class FakeLiveKitFrame:
+    def __init__(self, data, sample_rate, num_channels, samples_per_channel):
+        self.data = memoryview(data).cast("B").cast("h")
+        self.sample_rate = sample_rate
+        self.num_channels = num_channels
+        self.samples_per_channel = samples_per_channel
+
+
+class FakeLiveKitApm:
+    def __init__(self):
+        self.reverse_frames = []
+        self.capture_frames = []
+        self.delays = []
+
+    def set_stream_delay_ms(self, delay_ms):
+        self.delays.append(delay_ms)
+
+    def process_reverse_stream(self, frame):
+        self.reverse_frames.append(list(frame.data))
+
+    def process_stream(self, frame):
+        self.capture_frames.append(list(frame.data))
+        for index in range(len(frame.data)):
+            frame.data[index] = int(frame.data[index] / 2)
+
+
+class FakeEchoCanceller:
+    def __init__(self, events=None):
+        self.events = events
+        self.render_frames = []
+        self.capture_frames = []
+
+    def analyze_render(self, frame):
+        if self.events is not None:
+            self.events.append(("render", len(frame)))
+        self.render_frames.append(frame)
+
+    def process_capture(self, frame):
+        self.capture_frames.append(frame)
+        return frame * 0.5
 
 
 class FakeProcess:
@@ -196,6 +253,69 @@ def test_sounddevice_player_uses_selected_output_device(monkeypatch):
     assert calls == [([0.1], 24000, True, "USB Speaker")]
 
 
+def test_livekit_echo_canceller_feeds_render_and_cleans_capture_frames():
+    apm = FakeLiveKitApm()
+    canceller = LiveKitEchoCanceller(
+        apm=apm,
+        frame_factory=FakeLiveKitFrame,
+        sample_rate=16000,
+        stream_delay_ms=42,
+    )
+
+    canceller.analyze_render([0.25] * 160)
+    cleaned = canceller.process_capture([0.5] * 160)
+
+    assert apm.delays == [42]
+    assert len(apm.reverse_frames) == 1
+    assert len(apm.capture_frames) == 1
+    assert apm.reverse_frames[0][0] == pytest.approx(int(0.25 * 32767), abs=1)
+    assert cleaned.tolist() == pytest.approx([0.25] * 160, abs=1e-3)
+
+
+def test_aec_audio_player_feeds_resampled_tts_pcm_to_livekit_echo_canceller():
+    player = FakeAudioPlayer()
+    apm = FakeLiveKitApm()
+    canceller = LiveKitEchoCanceller(
+        apm=apm,
+        frame_factory=FakeLiveKitFrame,
+        sample_rate=16000,
+    )
+    aec_player = AecAudioPlayer(
+        player=player,
+        echo_canceller=canceller,
+        target_sample_rate=16000,
+    )
+
+    aec_player.play([0.1, -0.1, 0.2], 16000)
+    aec_player.stop()
+
+    assert len(player.plays) == 1
+    assert player.plays[0][0].tolist() == pytest.approx([0.1, -0.1, 0.2])
+    assert player.plays[0][1] == 16000
+    assert player.stops == 1
+    assert len(apm.reverse_frames) == 1
+
+
+def test_aec_audio_player_feeds_render_frames_in_playback_order():
+    events = []
+    player = FakeChunkedAudioPlayer(events)
+    canceller = FakeEchoCanceller(events)
+    aec_player = AecAudioPlayer(
+        player=player,
+        echo_canceller=canceller,
+        target_sample_rate=16000,
+    )
+
+    aec_player.play([0.1] * 320, 16000)
+
+    assert events == [
+        ("render", 160),
+        ("play", 160),
+        ("render", 160),
+        ("play", 160),
+    ]
+
+
 def test_macos_say_speaker_invokes_say_command(monkeypatch):
     calls = []
 
@@ -232,6 +352,8 @@ def test_build_speaker_auto_prefers_supertonic_for_korean(monkeypatch):
         output_device="Speaker",
         macos_say_voice=None,
         macos_say_rate=None,
+        echo_canceller=None,
+        aec_sample_rate=16000,
     )
 
     assert backend == "supertonic"
@@ -262,6 +384,8 @@ def test_build_speaker_can_use_macos_say_explicitly(monkeypatch):
         output_device=None,
         macos_say_voice=None,
         macos_say_rate=None,
+        echo_canceller=None,
+        aec_sample_rate=16000,
     )
 
     assert backend == "macos-say"
@@ -292,6 +416,8 @@ def test_build_speaker_auto_keeps_kokoro_for_non_korean(monkeypatch):
         output_device="Speaker",
         macos_say_voice=None,
         macos_say_rate=None,
+        echo_canceller=None,
+        aec_sample_rate=16000,
     )
 
     assert backend == "kokoro"
@@ -299,6 +425,41 @@ def test_build_speaker_auto_keeps_kokoro_for_non_korean(monkeypatch):
     assert calls[0]["voice"] == "am_michael"
     assert calls[0]["lang"] == "en-us"
     assert calls[0]["output_device"] == "Speaker"
+
+
+def test_build_speaker_wraps_supertonic_player_when_echo_canceller_is_enabled(
+    monkeypatch,
+):
+    calls = []
+
+    def fake_from_cache(**kwargs):
+        calls.append(kwargs)
+        return "supertonic-speaker"
+
+    monkeypatch.setattr(
+        "agent_voice.providers.SupertonicSpeaker.from_cache",
+        fake_from_cache,
+    )
+
+    echo_canceller = FakeEchoCanceller()
+    speaker, backend = _build_speaker(
+        backend="supertonic",
+        cache_dir=Path(".cache/test"),
+        tts_voice="am_michael",
+        supertonic_voice="M2",
+        tts_lang="ko",
+        tts_speed=0.94,
+        output_device="Speaker",
+        macos_say_voice=None,
+        macos_say_rate=None,
+        echo_canceller=echo_canceller,
+        aec_sample_rate=16000,
+    )
+
+    assert backend == "supertonic"
+    assert speaker == "supertonic-speaker"
+    assert isinstance(calls[0]["player"], AecAudioPlayer)
+    assert calls[0]["player"].echo_canceller is echo_canceller
 
 
 def test_keyboard_transcript_source_reads_typed_lines():
@@ -375,6 +536,78 @@ def test_microphone_source_uses_selected_input_device(monkeypatch):
     source.close()
 
     assert captured_stream_kwargs[0]["device"] == 2
+
+
+def test_microphone_source_transcribes_livekit_echo_cancelled_audio(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    captured_audio = []
+
+    class FakeInputStream:
+        def __init__(self, **kwargs):
+            return None
+
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
+        def close(self):
+            return None
+
+    class Segment:
+        text = "clean speech"
+
+    class FakeWhisperModel:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        def transcribe(self, audio, **kwargs):
+            captured_audio.append(audio.copy())
+            return [Segment()], None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sounddevice",
+        SimpleNamespace(InputStream=FakeInputStream),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "faster_whisper",
+        SimpleNamespace(WhisperModel=FakeWhisperModel),
+    )
+
+    echo_canceller = FakeEchoCanceller()
+    source = MicrophoneWhisperTranscriptSource(
+        sample_rate=16000,
+        chunk_ms=10,
+        vad_threshold=0.01,
+        silence_seconds=0.01,
+        min_speech_seconds=0.001,
+        use_smart_turn=False,
+        echo_canceller=echo_canceller,
+    )
+    try:
+        source._on_audio(np.full((160, 1), 0.5, dtype=np.float32), 160, None, None)
+        source._on_audio(np.zeros((160, 1), dtype=np.float32), 160, None, None)
+
+        transcript = None
+        for _ in range(50):
+            transcript = source.next_transcript()
+            if transcript is not None:
+                break
+            time.sleep(0.01)
+    finally:
+        source.close()
+
+    assert transcript is not None
+    assert transcript.text == "clean speech"
+    assert len(echo_canceller.capture_frames) >= 2
+    assert captured_audio[0].max() == pytest.approx(0.25)
 
 
 def test_managed_voice_loop_starts_agent_and_closes_resources():
