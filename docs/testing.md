@@ -32,7 +32,9 @@ uv run agent-voice doctor --list-devices
 
 `doctor` is not a replacement for product E2E. It checks package imports,
 agent command availability, audio device discovery, and Kokoro cache status on
-the current machine so runtime failures are easier to diagnose.
+the current machine so runtime failures are easier to diagnose. Kokoro cache
+checks include minimum file sizes so interrupted downloads and HTML error
+responses do not look like valid model assets.
 
 ## 2. Provider Smoke
 

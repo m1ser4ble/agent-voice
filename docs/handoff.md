@@ -176,8 +176,9 @@ uv run agent-voice doctor --agent none
 
 This checks Python package imports, the selected agent command, audio input and
 output device discovery, and whether the expected Kokoro model files already
-exist under `.cache/agent-voice/kokoro/`. It does not install dependencies,
-download models, test real playback, or run live transcription.
+exist under `.cache/agent-voice/kokoro/` with plausible file sizes. It does
+not install dependencies, download models, test real playback, or run live
+transcription.
 
 ## Next Session Task
 

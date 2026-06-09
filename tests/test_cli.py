@@ -63,6 +63,13 @@ class FakeDoctorProbe(DoctorProbe):
     def path_exists(self, path):
         return Path(path).name in {"kokoro-v1.0.onnx", "voices-v1.0.bin"}
 
+    def path_size(self, path):
+        if Path(path).name == "kokoro-v1.0.onnx":
+            return 50 * 1024 * 1024
+        if Path(path).name == "voices-v1.0.bin":
+            return 1 * 1024 * 1024
+        return 0
+
 
 def test_cli_codex_once_sends_command_and_prints_voice_summary():
     agent = FakeAgent()

@@ -22,6 +22,8 @@ KOKORO_VOICES_URL = (
     "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
     "model-files-v1.0/voices-v1.0.bin"
 )
+KOKORO_MODEL_MIN_BYTES = 50 * 1024 * 1024
+KOKORO_VOICES_MIN_BYTES = 1 * 1024 * 1024
 
 
 class AudioPlayer(Protocol):
@@ -71,8 +73,16 @@ class KokoroSpeaker:
 
         model_path = cache_dir / "kokoro-v1.0.onnx"
         voices_path = cache_dir / "voices-v1.0.bin"
-        _download_if_missing(KOKORO_MODEL_URL, model_path)
-        _download_if_missing(KOKORO_VOICES_URL, voices_path)
+        _download_if_missing(
+            KOKORO_MODEL_URL,
+            model_path,
+            min_bytes=KOKORO_MODEL_MIN_BYTES,
+        )
+        _download_if_missing(
+            KOKORO_VOICES_URL,
+            voices_path,
+            min_bytes=KOKORO_VOICES_MIN_BYTES,
+        )
         return cls(
             kokoro=Kokoro(str(model_path), str(voices_path)),
             player=SoundDevicePlayer(),
@@ -296,8 +306,33 @@ def build_local_voice_loop(
     return ManagedVoiceLoop(loop=loop, agent=agent, closeables=(transcript_source,))
 
 
-def _download_if_missing(url: str, path: Path) -> None:
-    if path.exists():
+def _download_if_missing(url: str, path: Path, *, min_bytes: int = 1) -> None:
+    if _asset_has_expected_size(path, min_bytes):
         return
+
+    if path.exists():
+        path.unlink()
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    urllib.request.urlretrieve(url, path)
+    temp_path = path.with_name(f"{path.name}.download")
+    temp_path.unlink(missing_ok=True)
+    try:
+        urllib.request.urlretrieve(url, temp_path)
+        if not _asset_has_expected_size(temp_path, min_bytes):
+            size = temp_path.stat().st_size if temp_path.exists() else 0
+            raise RuntimeError(
+                f"Downloaded asset {path.name} is too small "
+                f"({size} bytes; expected at least {min_bytes}). "
+                "The download may have been interrupted or rate-limited."
+            )
+        temp_path.replace(path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
+def _asset_has_expected_size(path: Path, min_bytes: int) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size >= min_bytes
+    except OSError:
+        return False

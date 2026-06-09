@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TextIO
 
+from agent_voice.providers import KOKORO_MODEL_MIN_BYTES, KOKORO_VOICES_MIN_BYTES
+
 
 @dataclass(frozen=True)
 class DoctorOptions:
@@ -32,6 +34,9 @@ class DoctorProbe(Protocol):
     def path_exists(self, path: Path) -> bool:
         """Return whether a runtime asset path exists."""
 
+    def path_size(self, path: Path) -> int:
+        """Return the runtime asset size in bytes, or 0 when unavailable."""
+
 
 class SystemDoctorProbe:
     def find_command(self, command: str) -> str | None:
@@ -49,6 +54,12 @@ class SystemDoctorProbe:
     def path_exists(self, path: Path) -> bool:
         return path.exists()
 
+    def path_size(self, path: Path) -> int:
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+
 
 @dataclass(frozen=True)
 class CheckResult:
@@ -65,9 +76,9 @@ REQUIRED_PACKAGES: tuple[tuple[str, str], ...] = (
     ("sounddevice", "sounddevice"),
 )
 
-KOKORO_MODEL_FILES: tuple[str, ...] = (
-    "kokoro-v1.0.onnx",
-    "voices-v1.0.bin",
+KOKORO_MODEL_FILES: tuple[tuple[str, int], ...] = (
+    ("kokoro-v1.0.onnx", KOKORO_MODEL_MIN_BYTES),
+    ("voices-v1.0.bin", KOKORO_VOICES_MIN_BYTES),
 )
 
 
@@ -223,19 +234,24 @@ def _device_channels(device: Mapping[str, Any], key: str) -> int:
 
 def _check_kokoro_cache(options: DoctorOptions, probe: DoctorProbe) -> CheckResult:
     cache_dir = options.cache_dir / "kokoro"
-    missing = [
-        filename
-        for filename in KOKORO_MODEL_FILES
-        if not probe.path_exists(cache_dir / filename)
-    ]
-    if not missing:
+    problems: list[str] = []
+    for filename, min_bytes in KOKORO_MODEL_FILES:
+        path = cache_dir / filename
+        if not probe.path_exists(path):
+            problems.append(f"missing {filename}")
+            continue
+        size = probe.path_size(path)
+        if size < min_bytes:
+            problems.append(
+                f"{filename} is too small ({size} bytes; expected at least {min_bytes})"
+            )
+
+    if not problems:
         return CheckResult("ok", "kokoro model cache", str(cache_dir))
     return CheckResult(
         "warn",
         "kokoro model cache",
-        "missing "
-        + ", ".join(missing)
-        + "; runtime will download these assets on first use",
+        "; ".join(problems) + "; runtime will re-download these assets on first use",
     )
 
 

@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
-import urllib.request
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 from faster_whisper import WhisperModel
 from kokoro_onnx import Kokoro
+from agent_voice.providers import (
+    KOKORO_MODEL_MIN_BYTES,
+    KOKORO_MODEL_URL,
+    KOKORO_VOICES_MIN_BYTES,
+    KOKORO_VOICES_URL,
+    _asset_has_expected_size,
+    _download_if_missing,
+)
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 
@@ -17,22 +24,15 @@ ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / ".cache" / "provider-smoke"
 WAV_PATH = CACHE / "kokoro-smoke.wav"
 
-KOKORO_MODEL_URL = (
-    "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
-    "model-files-v1.0/kokoro-v1.0.onnx"
-)
-KOKORO_VOICES_URL = (
-    "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
-    "model-files-v1.0/voices-v1.0.bin"
-)
-
-
 def download_if_missing(url: str, path: Path) -> None:
-    if path.exists():
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"downloading {path.name}")
-    urllib.request.urlretrieve(url, path)
+    min_bytes = (
+        KOKORO_MODEL_MIN_BYTES
+        if path.name.endswith(".onnx")
+        else KOKORO_VOICES_MIN_BYTES
+    )
+    if not _asset_has_expected_size(path, min_bytes):
+        print(f"downloading {path.name}")
+    _download_if_missing(url, path, min_bytes=min_bytes)
 
 
 async def main() -> None:

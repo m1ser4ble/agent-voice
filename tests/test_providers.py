@@ -1,6 +1,6 @@
 import pytest
 
-from agent_voice.providers import KokoroSpeaker, ManagedVoiceLoop
+from agent_voice.providers import KokoroSpeaker, ManagedVoiceLoop, _download_if_missing
 
 
 class FakeKokoro:
@@ -106,3 +106,38 @@ def test_managed_voice_loop_closes_resources_when_agent_start_fails():
     assert agent.starts == 1
     assert agent.stops == 1
     assert source.closes == 1
+
+
+def test_download_if_missing_replaces_too_small_existing_asset(tmp_path, monkeypatch):
+    path = tmp_path / "kokoro-v1.0.onnx"
+    path.write_bytes(b"<html>rate limited</html>")
+
+    def fake_urlretrieve(url, target):
+        target.write_bytes(b"x" * 2048)
+
+    monkeypatch.setattr(
+        "agent_voice.providers.urllib.request.urlretrieve",
+        fake_urlretrieve,
+    )
+
+    _download_if_missing("https://example.invalid/model.onnx", path, min_bytes=1024)
+
+    assert path.read_bytes() == b"x" * 2048
+
+
+def test_download_if_missing_rejects_too_small_download(tmp_path, monkeypatch):
+    path = tmp_path / "kokoro-v1.0.onnx"
+
+    def fake_urlretrieve(url, target):
+        target.write_bytes(b"<html>not a model</html>")
+
+    monkeypatch.setattr(
+        "agent_voice.providers.urllib.request.urlretrieve",
+        fake_urlretrieve,
+    )
+
+    with pytest.raises(RuntimeError, match="Downloaded asset kokoro-v1.0.onnx"):
+        _download_if_missing("https://example.invalid/model.onnx", path, min_bytes=1024)
+
+    assert not path.exists()
+    assert not (tmp_path / "kokoro-v1.0.onnx.download").exists()
