@@ -7,8 +7,13 @@ from dataclasses import dataclass
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 OSC_ESCAPE_RE = re.compile(r"\x1b\].*?(?:\x07|\x1b\\)")
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+WORKING_STATUS_RE = re.compile(
+    r"(?:[\u2800-\u28ff]\s*)?\bWorking(?:\.\.\.)?",
+    re.IGNORECASE,
+)
 VISUAL_SYMBOL_RE = re.compile(
     "["
+    "\u2800-\u28ff"
     "\U0001f300-\U0001faff"
     "\U00002600-\U000027bf"
     "\U0000fe0e-\U0000fe0f"
@@ -131,6 +136,7 @@ class VoicePresenter:
         candidate_blocks = reversed(blocks) if normalized_prompt is not None else blocks
         for block in candidate_blocks:
             summary = self._clean_speech_text(" ".join(block))
+            summary = self._dedupe_streaming_repeat(summary)
             if summary:
                 return summary[:220]
         return ""
@@ -161,8 +167,20 @@ class VoicePresenter:
         return len(line) >= 8 and not (set(line) - set("─━-_= "))
 
     def _clean_speech_text(self, text: str) -> str:
+        text = WORKING_STATUS_RE.sub("", text)
         text = VISUAL_SYMBOL_RE.sub("", text)
         return re.sub(r"\s+", " ", text).strip()
+
+    def _dedupe_streaming_repeat(self, text: str) -> str:
+        text = text.strip()
+        for index in range(1, len(text)):
+            left = text[:index].strip()
+            right = text[index:].strip()
+            if len(left) < 8 or len(right) <= len(left):
+                continue
+            if right.startswith(left):
+                return right
+        return text
 
     def _normalize_echo_line(self, line: str | None) -> str:
         if line is None:

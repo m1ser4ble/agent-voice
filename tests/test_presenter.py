@@ -86,3 +86,25 @@ def test_presenter_skips_pi_startup_and_terminal_status_noise():
     summary = VoicePresenter(language="ko").summarize(output, prompt="그거라!")
 
     assert summary == "좋아요! 이어서 뭘 해드릴까요?"
+
+
+def test_presenter_removes_working_spinner_tokens_from_summary():
+    output = """
+⠹ Working... 흐흥… 무슨 일 도와드릴
+흐흥… 무슨 일 도와드릴까요? ⠸ Working...
+"""
+
+    summary = VoicePresenter(language="ko").summarize(output, prompt="뭐해?")
+
+    assert summary == "흐흥… 무슨 일 도와드릴까요?"
+
+
+def test_presenter_returns_empty_when_output_is_only_progress_spinner():
+    output = """
+⠹ Working...
+⠸ Working...
+"""
+
+    summary = VoicePresenter(language="ko").summarize(output, prompt="뭐해?")
+
+    assert summary == ""
