@@ -1,5 +1,7 @@
 from io import StringIO
+from pathlib import Path
 
+from agent_voice.doctor import DoctorProbe
 from agent_voice.cli import _collect_agent_output, main
 
 
@@ -34,6 +36,32 @@ class FakeVoiceLoop:
     def run_forever(self):
         self.runs += 1
         return 0
+
+
+class FakeDoctorProbe(DoctorProbe):
+    def __init__(self):
+        self.commands = {"pi": "/usr/bin/pi"}
+
+    def find_command(self, command):
+        return self.commands.get(command)
+
+    def has_package(self, package):
+        return package in {
+            "pexpect",
+            "faster_whisper",
+            "kokoro_onnx",
+            "pipecat",
+            "sounddevice",
+        }
+
+    def query_audio_devices(self):
+        return [
+            {"name": "Mic", "max_input_channels": 1, "max_output_channels": 0},
+            {"name": "Speaker", "max_input_channels": 0, "max_output_channels": 2},
+        ]
+
+    def path_exists(self, path):
+        return Path(path).name in {"kokoro-v1.0.onnx", "voices-v1.0.bin"}
 
 
 def test_cli_codex_once_sends_command_and_prints_voice_summary():
@@ -103,6 +131,26 @@ def test_cli_codex_defaults_to_voice_mode_with_passthrough_agent_args():
     assert agent.starts == 0
     assert voice_loop.runs == 1
     assert captured_commands == [("codex", "resume", "--model", "gpt-5")]
+
+
+def test_cli_doctor_runs_runtime_checks_instead_of_agent_target():
+    agent = FakeAgent()
+    voice_loop = FakeVoiceLoop()
+    output = StringIO()
+
+    exit_code = main(
+        ["doctor", "--agent", "pi", "--list-devices"],
+        agent_factory=lambda _: agent,
+        voice_loop_factory=lambda *_: voice_loop,
+        doctor_probe=FakeDoctorProbe(),
+        output=output,
+    )
+
+    assert exit_code == 0
+    assert agent.starts == 0
+    assert voice_loop.runs == 0
+    assert "[ok] command pi" in output.getvalue()
+    assert "Audio devices:" in output.getvalue()
 
 
 def test_cli_codex_once_requires_text_mode():

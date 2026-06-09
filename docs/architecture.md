@@ -78,9 +78,9 @@ flowchart LR
 | `Speaker` | Speaks presenter output and supports `stop()` for barge-in. Kokoro is the intended default TTS backend. | Protocol implemented in `loop.py`; `KokoroSpeaker` implemented in `providers.py` using Kokoro ONNX plus `sounddevice`. Real-device tuning still needed. |
 | `InterruptManager` | Decides whether a transcript should interrupt speech in the current state. | Implemented and wired into `VoiceLoop` and default CLI voice runtime. |
 | `VoiceSession` | Tracks `LISTENING`, `THINKING`, `SPEAKING`, and `INTERRUPTED`. | Implemented. |
-| `ProviderSetup` | Installs, configures, validates, and starts external providers such as Smart Turn/VAD, Whisper, Kokoro, and agent adapters. | Not implemented. |
+| `ProviderSetup` | Installs, configures, validates, and starts external providers such as Smart Turn/VAD, Whisper, Kokoro, and agent adapters. | Setup/profile installation is not implemented. Basic validation exists through `agent-voice doctor`. |
 | `ConfigProfile` | Captures known-good local stack choices such as `local-cpu`, `apple-silicon`, `cuda`, `codex-only`, or `pi-rpc`. | Not implemented. |
-| `HealthChecks` | Verifies mic access, model files, audio output, provider versions, agent command availability, and expected latency. | Not implemented. |
+| `HealthChecks` | Verifies mic access, model files, audio output, provider versions, agent command availability, and expected latency. | Initial `agent-voice doctor` is implemented for Python packages, agent command lookup, audio device discovery, and Kokoro cache status. Latency and playback/transcription deep checks are still future work. |
 
 ## Assembly Layer
 
@@ -111,9 +111,9 @@ uv run agent-voice setup --profile apple-silicon
 uv run agent-voice codex
 ```
 
-`agent-voice codex` is now the default voice entrypoint. Setup/doctor/profile
-commands are still planned; they should make the local voice stack easier to
-validate before runtime.
+`agent-voice doctor` is implemented as a read-only local readiness check.
+Setup/profile commands are still planned; they should make the local voice
+stack easier to configure, not just diagnose.
 
 Current verified provider smoke:
 

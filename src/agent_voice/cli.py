@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Protocol, TextIO
 
 from agent_voice.adapter import Agent, PexpectAgent
+from agent_voice.doctor import DoctorProbe, build_doctor_parser, run_doctor
 from agent_voice.interrupt import VoiceSession
 from agent_voice.loop import VoiceLoop
 from agent_voice.presenter import VoicePresenter
@@ -54,10 +55,14 @@ def main(
     *,
     agent_factory: AgentFactory | None = None,
     voice_loop_factory: VoiceLoopFactory | None = None,
+    doctor_probe: DoctorProbe | None = None,
     output: TextIO | None = None,
 ) -> int:
     args = _build_parser().parse_args(argv)
     output = output or sys.stdout
+
+    if args.target == "doctor":
+        return _run_doctor(args, probe=doctor_probe, output=output)
 
     command = _build_agent_command(args.target, args.agent_args)
     return _run_target(
@@ -67,6 +72,20 @@ def main(
         voice_loop_factory=voice_loop_factory,
         output=output,
     )
+
+
+def _run_doctor(
+    args: argparse.Namespace,
+    *,
+    probe: DoctorProbe | None,
+    output: TextIO,
+) -> int:
+    parser = build_doctor_parser(
+        default_cache_dir=Path(args.cache_dir),
+        default_whisper_model=args.whisper_model,
+    )
+    options = parser.parse_args(args.agent_args)
+    return run_doctor(options, probe=probe, output=output)
 
 
 def _run_target(
@@ -319,8 +338,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "target",
-        choices=("codex", "pi"),
-        help="Agent CLI to wrap. Use 'codex' or 'pi'.",
+        choices=("doctor", "codex", "pi"),
+        help="Command to run. Use 'doctor', 'codex', or 'pi'.",
     )
     parser.add_argument(
         "agent_args",

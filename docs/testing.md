@@ -14,6 +14,7 @@ This runs on GitHub-hosted CI. It uses fake agents, fake transcript sources,
 and fake speakers to verify code contracts:
 
 - CLI target passthrough for Codex/Pi
+- `agent-voice doctor` diagnostic behavior with fake probes
 - `PexpectAgent` behavior
 - `VoicePresenter` summaries
 - `VoiceLoop` state transitions
@@ -22,6 +23,16 @@ and fake speakers to verify code contracts:
 
 This does not require a microphone, speaker, Codex auth, Pi auth, or downloaded
 model files beyond normal Python package dependencies.
+
+Local readiness command:
+
+```bash
+uv run agent-voice doctor --list-devices
+```
+
+`doctor` is not a replacement for product E2E. It checks package imports,
+agent command availability, audio device discovery, and Kokoro cache status on
+the current machine so runtime failures are easier to diagnose.
 
 ## 2. Provider Smoke
 

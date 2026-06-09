@@ -290,7 +290,8 @@ compatible combinations of:
 
 - Provider metadata can describe model files, capabilities, setup hints, and
   health checks.
-- `agent-voice doctor` can verify the selected profile.
+- `agent-voice doctor` can verify the selected profile beyond the current
+  baseline package, command, audio-device, and Kokoro-cache checks.
 - Provider smoke tests can run per profile without requiring hosted services.
 
 ## Project Candidate: Mobile / Galaxy XR Companion Mode
@@ -361,7 +362,7 @@ These can be copied into GitHub issues when ready:
    compatibility.
 7. Build an ONNX mobile compatibility matrix for Kokoro, Smart Turn, and
    Whisper-compatible transcription.
-8. Add `agent-voice doctor` checks for selected provider profiles.
+8. Extend `agent-voice doctor` checks for selected provider profiles.
 9. Define mobile/XR transport events for transcript, interrupt, state, and
    response output.
 10. Prototype `mobile-xr-companion` mode with fake client tests first.

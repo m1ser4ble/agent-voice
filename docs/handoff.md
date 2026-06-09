@@ -82,13 +82,15 @@ Implemented:
   energy VAD, Smart Turn, and faster-whisper
 - `KokoroSpeaker` implementation with Kokoro ONNX and `sounddevice`
 - default CLI voice-mode wiring through `VoiceLoop`
+- `agent-voice doctor` runtime readiness checks for packages, Codex/Pi command
+  lookup, audio input/output devices, and Kokoro cache status
 - test coverage for all current modules
 
 Not implemented yet:
 
 - real hardware E2E validation for mic -> Whisper -> agent -> Kokoro speaker
 - tuned mic thresholds, echo behavior, and latency budget
-- `agent-voice doctor` for mic, speaker, model assets, and agent command checks
+- setup/profile commands such as `agent-voice setup --profile local-cpu`
 - Pi / Claude Code structured adapters
 - agent state inspection
 
@@ -148,15 +150,29 @@ Implement that with a Pi-specific adapter. Prefer Pi's structured RPC or JSON
 event modes over TUI scraping so the voice layer can derive agent state from
 events instead of raw terminal text.
 
+## Doctor
+
+Run a read-only local readiness check before a manual voice run:
+
+```bash
+uv run agent-voice doctor --list-devices
+uv run agent-voice doctor --agent pi
+uv run agent-voice doctor --agent none
+```
+
+This checks Python package imports, the selected agent command, audio input and
+output device discovery, and whether the expected Kokoro model files already
+exist under `.cache/agent-voice/kokoro/`. It does not install dependencies,
+download models, test real playback, or run live transcription.
+
 ## Next Session Task
 
 Recommended next task:
 
 1. Run real hardware E2E: `uv run agent-voice codex` with mic and speaker.
 2. Tune `MicrophoneWhisperTranscriptSource` thresholds and latency.
-3. Add `agent-voice doctor` for mic/speaker/model/agent command checks.
-4. Decide Kokoro language/voice defaults for Korean summaries.
-5. Add structured Pi / Claude Code adapters.
+3. Decide Kokoro language/voice defaults for Korean summaries.
+4. Add structured Pi / Claude Code adapters.
 
 Keep the public contract local-first and avoid Realtime API dependency.
 

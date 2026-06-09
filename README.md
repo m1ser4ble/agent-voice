@@ -42,6 +42,8 @@ This repo currently contains the local voice MVP core:
 - `agent-voice codex ...`: starts voice mode by default and passes all target
   args through to Codex
 - `agent-voice pi ...`: uses the same pexpect boundary for Pi
+- `agent-voice doctor`: checks Python packages, agent command availability,
+  audio input/output devices, and Kokoro model cache status
 
 ## Install
 
@@ -50,6 +52,18 @@ uv sync
 ```
 
 ## Run
+
+Check local runtime readiness:
+
+```bash
+uv run agent-voice doctor
+uv run agent-voice doctor --agent pi --list-devices
+uv run agent-voice doctor --agent none
+```
+
+`doctor` verifies the current machine. It does not install dependencies or
+download model files; `uv sync` handles Python dependencies, and runtime model
+assets are downloaded by the provider code on first use.
 
 Voice mode entrypoint:
 
@@ -141,6 +155,12 @@ uv run pytest
 
 GitHub Actions runs the same test suite on Python 3.12 and 3.13, builds the
 package, and runs provider smoke on `main` pushes or manual dispatch.
+
+Check the current machine before a manual voice run:
+
+```bash
+uv run agent-voice doctor --list-devices
+```
 
 Run the real local provider smoke:
 
