@@ -160,6 +160,14 @@ uv run agent-voice pi -c
 uv run agent-voice --text pi -c
 ```
 
+Audio device selection is available before the target:
+
+```bash
+uv run agent-voice doctor --list-devices
+uv run agent-voice --input-device 2 pi
+uv run agent-voice --input-device "USB Microphone" --output-device "USB Speaker" codex
+```
+
 Implement that with a Pi-specific adapter. Prefer Pi's structured RPC or JSON
 event modes over TUI scraping so the voice layer can derive agent state from
 events instead of raw terminal text.

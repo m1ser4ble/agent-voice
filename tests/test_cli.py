@@ -2,7 +2,7 @@ from io import StringIO
 from pathlib import Path
 
 from agent_voice.doctor import DoctorProbe
-from agent_voice.cli import _collect_agent_output, main
+from agent_voice.cli import _collect_agent_output, _parse_audio_device, main
 
 
 class FakeAgent:
@@ -155,6 +155,28 @@ def test_cli_voice_mode_applies_default_voice_preset():
 
     assert exit_code == 0
     assert captured_settings == [("am_michael", "en-us", 0.94)]
+
+
+def test_cli_voice_mode_accepts_audio_device_selection():
+    voice_loop = FakeVoiceLoop()
+    captured_devices = []
+
+    exit_code = main(
+        ["--input-device", "2", "--output-device", "USB Speaker", "pi"],
+        voice_loop_factory=lambda _, args: (
+            captured_devices.append((args.input_device, args.output_device)) or voice_loop
+        ),
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert captured_devices == [("2", "USB Speaker")]
+
+
+def test_audio_device_parser_accepts_index_or_name():
+    assert _parse_audio_device("2") == 2
+    assert _parse_audio_device("USB Microphone") == "USB Microphone"
+    assert _parse_audio_device(None) is None
 
 
 def test_cli_tts_overrides_take_precedence_over_voice_preset():

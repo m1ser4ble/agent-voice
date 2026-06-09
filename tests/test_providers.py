@@ -3,6 +3,7 @@ import pytest
 from agent_voice.providers import (
     KokoroSpeaker,
     ManagedVoiceLoop,
+    MicrophoneWhisperTranscriptSource,
     StderrDownloadReporter,
     _download_if_missing,
 )
@@ -81,6 +82,65 @@ def test_kokoro_speaker_synthesizes_and_plays_audio():
     assert kokoro.calls == [("Tests passed.", "af_sarah", 1.1, "en-us")]
     assert player.plays == [([0.1, -0.1], 24000)]
     assert player.stops == 1
+
+
+def test_sounddevice_player_uses_selected_output_device(monkeypatch):
+    from agent_voice.providers import SoundDevicePlayer
+
+    calls = []
+
+    class FakeSoundDevice:
+        def play(self, audio, sample_rate, *, blocking, device):
+            calls.append((audio, sample_rate, blocking, device))
+
+        def stop(self):
+            return None
+
+    monkeypatch.setitem(__import__("sys").modules, "sounddevice", FakeSoundDevice())
+
+    SoundDevicePlayer(output_device="USB Speaker").play([0.1], 24000)
+
+    assert calls == [([0.1], 24000, True, "USB Speaker")]
+
+
+def test_microphone_source_uses_selected_input_device(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    captured_stream_kwargs = []
+
+    class FakeInputStream:
+        def __init__(self, **kwargs):
+            captured_stream_kwargs.append(kwargs)
+
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
+        def close(self):
+            return None
+
+    class FakeWhisperModel:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sounddevice",
+        SimpleNamespace(InputStream=FakeInputStream),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "faster_whisper",
+        SimpleNamespace(WhisperModel=FakeWhisperModel),
+    )
+
+    source = MicrophoneWhisperTranscriptSource(input_device=2)
+    source.close()
+
+    assert captured_stream_kwargs[0]["device"] == 2
 
 
 def test_managed_voice_loop_starts_agent_and_closes_resources():

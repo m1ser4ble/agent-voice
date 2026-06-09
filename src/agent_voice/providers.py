@@ -128,10 +128,12 @@ class StderrDownloadReporter:
 
 @dataclass
 class SoundDevicePlayer:
+    output_device: int | str | None = None
+
     def play(self, audio: Any, sample_rate: int) -> None:
         import sounddevice as sd
 
-        sd.play(audio, sample_rate, blocking=True)
+        sd.play(audio, sample_rate, blocking=True, device=self.output_device)
 
     def stop(self) -> None:
         import sounddevice as sd
@@ -155,6 +157,7 @@ class KokoroSpeaker:
         voice: str = "af_sarah",
         speed: float = 1.0,
         lang: str = "en-us",
+        output_device: int | str | None = None,
     ) -> KokoroSpeaker:
         from kokoro_onnx import Kokoro
 
@@ -175,7 +178,7 @@ class KokoroSpeaker:
         )
         return cls(
             kokoro=Kokoro(str(model_path), str(voices_path)),
-            player=SoundDevicePlayer(),
+            player=SoundDevicePlayer(output_device=output_device),
             voice=voice,
             speed=speed,
             lang=lang,
@@ -224,6 +227,7 @@ class MicrophoneWhisperTranscriptSource:
         whisper_language: str | None = None,
         compute_type: str = "int8",
         use_smart_turn: bool = True,
+        input_device: int | str | None = None,
     ) -> None:
         import numpy as np
         import sounddevice as sd
@@ -250,6 +254,7 @@ class MicrophoneWhisperTranscriptSource:
             dtype="float32",
             blocksize=self.chunk_size,
             callback=self._on_audio,
+            device=input_device,
         )
         self._worker = threading.Thread(target=self._run, daemon=True)
         self._stream.start()
@@ -368,6 +373,8 @@ def build_local_voice_loop(
     tts_speed: float = 1.0,
     sample_rate: int = 16000,
     vad_threshold: float = 0.01,
+    input_device: int | str | None = None,
+    output_device: int | str | None = None,
 ) -> ManagedVoiceLoop:
     agent = PexpectAgent(command=command)
     transcript_source = MicrophoneWhisperTranscriptSource(
@@ -375,6 +382,7 @@ def build_local_voice_loop(
         vad_threshold=vad_threshold,
         whisper_model=whisper_model,
         whisper_language=whisper_language,
+        input_device=input_device,
     )
     try:
         speaker = KokoroSpeaker.from_cache(
@@ -382,6 +390,7 @@ def build_local_voice_loop(
             voice=tts_voice,
             speed=tts_speed,
             lang=tts_lang,
+            output_device=output_device,
         )
     except Exception:
         transcript_source.close()

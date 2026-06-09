@@ -94,6 +94,15 @@ uv run agent-voice --voice-preset high_quality codex
 uv run agent-voice --tts-voice af_sarah --tts-speed 1.0 codex --model <model>
 ```
 
+Select a specific microphone or speaker by sounddevice index or name. Use
+`doctor --list-devices` to find the available device values:
+
+```bash
+uv run agent-voice doctor --list-devices
+uv run agent-voice --input-device 2 pi
+uv run agent-voice --input-device "USB Microphone" --output-device "USB Speaker" codex
+```
+
 Voice presets live in `src/agent_voice/voice_presets.toml`. Add or override
 presets with your own TOML file:
 

@@ -192,6 +192,8 @@ def _build_default_voice_loop(
             tts_speed=args.tts_speed,
             sample_rate=args.sample_rate,
             vad_threshold=args.vad_threshold,
+            input_device=_parse_audio_device(args.input_device),
+            output_device=_parse_audio_device(args.output_device),
         )
     except (ImportError, ModuleNotFoundError) as error:
         raise VoiceModeUnavailableError(
@@ -213,6 +215,15 @@ def _apply_voice_settings(args: argparse.Namespace) -> None:
     args.tts_voice = settings.voice
     args.tts_lang = settings.lang
     args.tts_speed = settings.speed
+
+
+def _parse_audio_device(value: str | None) -> int | str | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return value
 
 
 def _build_agent_command(target: str, agent_args: Sequence[str]) -> tuple[str, ...]:
@@ -372,6 +383,16 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.01,
         help="Simple energy threshold used before Smart Turn.",
+    )
+    parser.add_argument(
+        "--input-device",
+        default=None,
+        help="sounddevice input device index or name for microphone capture.",
+    )
+    parser.add_argument(
+        "--output-device",
+        default=None,
+        help="sounddevice output device index or name for speaker playback.",
     )
 
     parser.add_argument(
