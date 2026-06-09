@@ -59,6 +59,11 @@ This is still not a product E2E test. It does not use the microphone, does not
 play through the speaker, does not spawn Codex/Pi, and does not test barge-in
 against live audio playback.
 
+The GitHub workflow exposes this as an opt-in `workflow_dispatch` job rather
+than a required push/PR check. The script downloads external model files from
+Hugging Face, so normal CI should not fail just because an upstream service is
+rate-limiting anonymous runners.
+
 ## 3. Hardware E2E
 
 Hardware E2E means testing the real product loop on a real machine:

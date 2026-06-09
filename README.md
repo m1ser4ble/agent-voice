@@ -153,8 +153,9 @@ Existing projects mostly solve adjacent problems:
 uv run pytest
 ```
 
-GitHub Actions runs the same test suite on Python 3.12 and 3.13, builds the
-package, and runs provider smoke on `main` pushes or manual dispatch.
+GitHub Actions runs the same test suite on Python 3.12 and 3.13 and builds the
+package. Provider smoke is available on manual workflow dispatch because it
+downloads external model files and can be rate-limited by upstream services.
 
 Check the current machine before a manual voice run:
 
