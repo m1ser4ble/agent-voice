@@ -124,15 +124,15 @@ Voice preset selection is implemented as a small configuration layer:
 ```bash
 uv run agent-voice --voice-preset jarvis_style codex
 uv run agent-voice --voice-config ./voice-presets.toml codex
-uv run agent-voice --tts-voice af_bella --tts-speed 1.0 codex
+uv run agent-voice --supertonic-voice F2 --tts-speed 1.0 codex
+uv run agent-voice --tts-backend kokoro --tts-voice af_bella codex
 ```
 
 The default preset is `jarvis_style`. With `--tts-backend auto`, Korean speech
-on macOS uses the built-in `say` command when it is available; other platforms
-use the Kokoro backend. The bundled Kokoro voice remains a stock assistant-style
-voice, not a celebrity or character voice clone. Kokoro is still not treated as
-a dedicated Korean TTS model; Korean speech quality remains a provider-tuning
-concern when Kokoro is selected.
+uses the Supertonic backend. The bundled `jarvis_style` preset maps to
+Supertonic `M2`, a stock male assistant-style voice, not a celebrity or
+character voice clone. Kokoro remains available as an explicit backend, but it
+is not treated as the default Korean TTS provider.
 
 Default TTS backends must be actively maintained enough to install cleanly in
 the project `uv` environment. Backend candidates that require stale Python
@@ -186,7 +186,7 @@ Concrete providers can then change without rewriting the voice loop:
 | --- | --- | --- |
 | Turn detection | Pipecat Smart Turn / VAD | Silero VAD, WebRTC VAD, custom semantic turn detector |
 | Transcription | Whisper | faster-whisper, whisper.cpp, platform STT |
-| Speech | Kokoro; macOS `say` for Korean on macOS auto mode | Piper, Coqui, system TTS, hosted TTS if explicitly configured |
+| Speech | Supertonic for Korean auto mode; Kokoro fallback; macOS `say` explicitly | Piper, Coqui, system TTS, hosted TTS if explicitly configured |
 | Agent control | `PexpectAgent` | Pi RPC adapter, Claude structured adapter, tmux adapter |
 | Presentation | `VoicePresenter` | rule-based presenter, LLM-backed presenter, agent-specific presenter |
 

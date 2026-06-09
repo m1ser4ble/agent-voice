@@ -199,6 +199,7 @@ def _build_default_voice_loop(
             terminal_output=getattr(args, "_agent_voice_output", sys.stdout),
             transparent_io=not args.quiet_agent_io,
             tts_backend=args.tts_backend,
+            supertonic_voice=args.supertonic_voice,
             macos_say_voice=args.macos_say_voice,
             macos_say_rate=args.macos_say_rate,
         )
@@ -215,11 +216,15 @@ def _apply_voice_settings(args: argparse.Namespace) -> None:
         config_path=Path(args.voice_config) if args.voice_config else None,
         preset_name=args.voice_preset,
         voice_override=args.tts_voice,
+        supertonic_voice_override=args.supertonic_voice,
         lang_override=args.tts_lang,
         speed_override=args.tts_speed,
     )
     args.voice_preset = settings.preset
-    args.tts_voice = settings.voice
+    args.tts_voice = settings.kokoro_voice
+    args.supertonic_voice = settings.supertonic_voice
+    if args.macos_say_voice is None and settings.macos_say_voice is not None:
+        args.macos_say_voice = settings.macos_say_voice
     args.tts_lang = settings.lang
     args.tts_speed = settings.speed
 
@@ -371,22 +376,26 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--tts-lang",
         default=None,
-        help="Override the Kokoro language/accent code from the selected voice preset.",
+        help="Override the TTS language/accent code from the selected voice preset.",
     )
     parser.add_argument(
         "--tts-speed",
         type=float,
         default=None,
-        help="Override the Kokoro speech speed from the selected voice preset.",
+        help="Override the TTS speech speed from the selected voice preset.",
     )
     parser.add_argument(
         "--tts-backend",
-        choices=("auto", "kokoro", "macos-say"),
+        choices=("auto", "kokoro", "macos-say", "supertonic"),
         default="auto",
         help=(
-            "TTS backend. 'auto' uses macOS say for Korean on macOS, "
-            "otherwise Kokoro."
+            "TTS backend. 'auto' uses Supertonic for Korean, otherwise Kokoro."
         ),
+    )
+    parser.add_argument(
+        "--supertonic-voice",
+        default=None,
+        help="Voice style for the Supertonic backend, for example M2 or F2.",
     )
     parser.add_argument(
         "--macos-say-voice",

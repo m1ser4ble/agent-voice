@@ -7,8 +7,9 @@ that sits on top of terminal coding agents like Codex, Pi, and Claude Code
 without modifying them.
 
 Part of the value is assembly: choosing compatible local components, wiring
-them together, and providing sane defaults for Smart Turn/VAD, Whisper, Kokoro,
-and terminal-agent adapters so users do not have to hand-build a voice stack.
+them together, and providing sane defaults for Smart Turn/VAD, Whisper,
+Supertonic/Kokoro, and terminal-agent adapters so users do not have to
+hand-build a voice stack.
 
 The long-term target is a voice operating layer for coding agents:
 
@@ -19,7 +20,7 @@ Mic
   -> Agent Adapter
   -> Codex / Pi / Claude Code
   -> Voice Presenter
-  -> Kokoro
+  -> Supertonic / Kokoro
   -> Speaker
 ```
 
@@ -41,8 +42,9 @@ This repo currently contains the local voice MVP core:
   mode is still running
 - terminal I/O visibility: prints completed transcripts, submitted agent input,
   raw agent output, and spoken summaries during voice mode
-- `KokoroSpeaker`: synthesizes presenter output with Kokoro ONNX and plays it
-  through the local speaker
+- `SupertonicSpeaker`: synthesizes Korean presenter output with Supertonic and
+  plays it through the local speaker
+- `KokoroSpeaker`: fallback local TTS backend for Kokoro ONNX voices
 - `agent-voice codex ...`: starts voice mode by default and passes all target
   args through to Codex
 - `agent-voice pi ...`: uses the same pexpect boundary for Pi
@@ -84,20 +86,19 @@ completed transcript, the exact input submitted to Codex/Pi, the raw agent
 output collected from the child process, and the shorter voice summary. Say or
 type `종료` / `exit` to stop the session.
 
-The default voice preset is `jarvis_style`. For Korean speech on macOS,
-`--tts-backend auto` uses the built-in `say` command so Korean summaries do not
-go through Kokoro's English-oriented stock voices. Other platforms use Kokoro by
-default. Force a backend when needed:
+The default voice preset is `jarvis_style`. With `--tts-backend auto`, Korean
+speech uses Supertonic by default. The bundled `jarvis_style` preset maps to
+Supertonic `M2`, a stock male assistant-style voice; it is not a celebrity or
+movie-character voice clone. Force a backend when needed:
 
 ```bash
+uv run agent-voice --tts-backend supertonic --supertonic-voice F2 codex
 uv run agent-voice --tts-backend macos-say --macos-say-voice Yuna codex
 uv run agent-voice --tts-backend kokoro codex
 ```
 
-The bundled Kokoro preset is a stock assistant-style voice, not a celebrity or
-movie-character voice clone. Kokoro is still not a dedicated Korean TTS model,
-so Korean speech quality remains a provider-tuning area when using the Kokoro
-backend.
+Kokoro is still available as an explicit backend, but it is not treated as the
+default Korean TTS provider.
 
 Pass Codex options after the `codex` target. `agent-voice` does not parse these
 options, so Codex version changes should not require `agent-voice` CLI changes:
@@ -113,7 +114,8 @@ Put `agent-voice` options before the target:
 ```bash
 uv run agent-voice --language ko --whisper-model tiny codex
 uv run agent-voice --voice-preset high_quality codex
-uv run agent-voice --tts-voice af_sarah --tts-speed 1.0 codex --model <model>
+uv run agent-voice --supertonic-voice F2 --tts-speed 1.0 codex --model <model>
+uv run agent-voice --tts-backend kokoro --tts-voice af_sarah codex
 ```
 
 `--language ko` controls the speech summary language and is the default.
@@ -144,6 +146,8 @@ preset = "workstation"
 
 [presets.workstation]
 voice = "bm_george"
+kokoro_voice = "bm_george"
+supertonic_voice = "M3"
 lang = "en-gb"
 speed = 0.9
 description = "Local workstation voice."
@@ -190,9 +194,11 @@ uv run agent-voice --text --once "테스트는?" pi -c
 ### Current Voice Caveats
 
 The default voice path is wired, but it still needs real-device tuning. It uses
-local mic/speaker access through `sounddevice`, downloads Kokoro model assets
-into `.cache/agent-voice/kokoro/`, and uses CPU faster-whisper by default.
-System PortAudio/microphone permissions must be available.
+local mic/speaker access through `sounddevice`, downloads Supertonic assets via
+the Hugging Face cache on first Korean TTS use, and uses CPU faster-whisper by
+default. Kokoro downloads its own assets into `.cache/agent-voice/kokoro/` when
+that backend is selected. System PortAudio/microphone permissions must be
+available.
 
 ## Why This Exists
 

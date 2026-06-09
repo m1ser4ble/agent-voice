@@ -12,6 +12,7 @@ from agent_voice.providers import (
     MergedTranscriptSource,
     MicrophoneWhisperTranscriptSource,
     StderrDownloadReporter,
+    SupertonicSpeaker,
     _build_speaker,
     _download_if_missing,
 )
@@ -24,6 +25,22 @@ class FakeKokoro:
     def create(self, text, *, voice, speed, lang):
         self.calls.append((text, voice, speed, lang))
         return [0.1, -0.1], 24000
+
+
+class FakeSupertonic:
+    sample_rate = 44100
+
+    def __init__(self):
+        self.styles = []
+        self.calls = []
+
+    def get_voice_style(self, *, voice_name):
+        self.styles.append(voice_name)
+        return {"voice": voice_name}
+
+    def synthesize(self, text, *, voice_style, speed, lang):
+        self.calls.append((text, voice_style, speed, lang))
+        return [[0.1, -0.1, 0.2]], [0.1]
 
 
 class FakeAudioPlayer:
@@ -130,6 +147,36 @@ def test_kokoro_speaker_synthesizes_and_plays_audio():
     assert player.stops == 1
 
 
+def test_supertonic_speaker_synthesizes_and_plays_mono_audio():
+    tts = FakeSupertonic()
+    player = FakeAudioPlayer()
+    speaker = SupertonicSpeaker(
+        tts=tts,
+        player=player,
+        voice="M2",
+        speed=0.94,
+        lang="ko",
+        sample_rate=44100,
+    )
+
+    speaker.say("테스트는 모두 통과했습니다.")
+    speaker.stop()
+
+    assert tts.styles == ["M2"]
+    assert tts.calls == [
+        (
+            "테스트는 모두 통과했습니다.",
+            {"voice": "M2"},
+            0.94,
+            "ko",
+        )
+    ]
+    audio, sample_rate = player.plays[0]
+    assert list(audio) == [0.1, -0.1, 0.2]
+    assert sample_rate == 44100
+    assert player.stops == 1
+
+
 def test_sounddevice_player_uses_selected_output_device(monkeypatch):
     from agent_voice.providers import SoundDevicePlayer
 
@@ -163,7 +210,38 @@ def test_macos_say_speaker_invokes_say_command(monkeypatch):
     assert calls == [["say", "-v", "Yuna", "-r", "185", "감사합니다."]]
 
 
-def test_build_speaker_auto_prefers_macos_say_for_korean_on_macos(monkeypatch):
+def test_build_speaker_auto_prefers_supertonic_for_korean(monkeypatch):
+    calls = []
+
+    def fake_from_cache(**kwargs):
+        calls.append(kwargs)
+        return "supertonic-speaker"
+
+    monkeypatch.setattr(
+        "agent_voice.providers.SupertonicSpeaker.from_cache",
+        fake_from_cache,
+    )
+
+    speaker, backend = _build_speaker(
+        backend="auto",
+        cache_dir=Path(".cache/test"),
+        tts_voice="am_michael",
+        supertonic_voice="M2",
+        tts_lang="ko",
+        tts_speed=0.94,
+        output_device="Speaker",
+        macos_say_voice=None,
+        macos_say_rate=None,
+    )
+
+    assert backend == "supertonic"
+    assert speaker == "supertonic-speaker"
+    assert calls[0]["voice"] == "M2"
+    assert calls[0]["lang"] == "ko"
+    assert calls[0]["output_device"] == "Speaker"
+
+
+def test_build_speaker_can_use_macos_say_explicitly(monkeypatch):
     def fake_run(command, *, capture_output, text, check):
         class Result:
             stdout = "Yuna            ko_KR    # 안녕하세요?\\n"
@@ -175,9 +253,10 @@ def test_build_speaker_auto_prefers_macos_say_for_korean_on_macos(monkeypatch):
     monkeypatch.setattr("agent_voice.providers.subprocess.run", fake_run)
 
     speaker, backend = _build_speaker(
-        backend="auto",
+        backend="macos-say",
         cache_dir=Path(".cache/test"),
         tts_voice="am_michael",
+        supertonic_voice="M2",
         tts_lang="ko",
         tts_speed=0.94,
         output_device=None,
@@ -190,7 +269,7 @@ def test_build_speaker_auto_prefers_macos_say_for_korean_on_macos(monkeypatch):
     assert speaker.voice == "Yuna"
 
 
-def test_build_speaker_auto_keeps_kokoro_off_macos(monkeypatch):
+def test_build_speaker_auto_keeps_kokoro_for_non_korean(monkeypatch):
     calls = []
 
     def fake_from_cache(**kwargs):
@@ -207,7 +286,8 @@ def test_build_speaker_auto_keeps_kokoro_off_macos(monkeypatch):
         backend="auto",
         cache_dir=Path(".cache/test"),
         tts_voice="am_michael",
-        tts_lang="ko",
+        supertonic_voice="M2",
+        tts_lang="en-us",
         tts_speed=0.94,
         output_device="Speaker",
         macos_say_voice=None,
@@ -217,7 +297,7 @@ def test_build_speaker_auto_keeps_kokoro_off_macos(monkeypatch):
     assert backend == "kokoro"
     assert speaker == "kokoro-speaker"
     assert calls[0]["voice"] == "am_michael"
-    assert calls[0]["lang"] == "ko"
+    assert calls[0]["lang"] == "en-us"
     assert calls[0]["output_device"] == "Speaker"
 
 

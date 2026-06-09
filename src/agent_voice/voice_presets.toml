@@ -3,18 +3,24 @@ preset = "jarvis_style"
 
 [presets.jarvis_style]
 voice = "am_michael"
+kokoro_voice = "am_michael"
+supertonic_voice = "M2"
 lang = "ko"
 speed = 0.94
-description = "Stock Kokoro male assistant preset with Korean phonemizer; not a celebrity or character voice clone."
+description = "Stock male assistant-style preset; not a celebrity or character voice clone."
 
 [presets.high_quality]
 voice = "af_bella"
+kokoro_voice = "af_bella"
+supertonic_voice = "F2"
 lang = "en-us"
 speed = 1.0
-description = "Higher-quality stock Kokoro voice for clear spoken summaries."
+description = "Clear stock voice preset for spoken summaries."
 
 [presets.legacy_default]
 voice = "af_sarah"
+kokoro_voice = "af_sarah"
+supertonic_voice = "F2"
 lang = "en-us"
 speed = 1.0
 description = "Original neutral stock Kokoro voice used by early agent-voice builds."

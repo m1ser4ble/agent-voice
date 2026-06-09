@@ -252,6 +252,51 @@ class KokoroSpeaker:
 
 
 @dataclass
+class SupertonicSpeaker:
+    tts: Any
+    player: AudioPlayer
+    voice: str = "M2"
+    speed: float = 1.0
+    lang: str = "ko"
+    sample_rate: int = 44100
+
+    @classmethod
+    def from_cache(
+        cls,
+        *,
+        voice: str = "M2",
+        speed: float = 1.0,
+        lang: str = "ko",
+        output_device: int | str | None = None,
+    ) -> SupertonicSpeaker:
+        from supertonic import TTS
+
+        tts = TTS(auto_download=True)
+        sample_rate = int(getattr(tts, "sample_rate", 44100) or 44100)
+        return cls(
+            tts=tts,
+            player=SoundDevicePlayer(output_device=output_device),
+            voice=voice,
+            speed=speed,
+            lang=lang,
+            sample_rate=sample_rate,
+        )
+
+    def say(self, text: str) -> None:
+        style = self.tts.get_voice_style(voice_name=self.voice)
+        audio, _ = self.tts.synthesize(
+            text,
+            voice_style=style,
+            speed=self.speed,
+            lang=_supertonic_lang(self.lang),
+        )
+        self.player.play(_mono_audio(audio), self.sample_rate)
+
+    def stop(self) -> None:
+        self.player.stop()
+
+
+@dataclass
 class MacOSSaySpeaker:
     voice: str | None = None
     rate: int | None = None
@@ -523,6 +568,7 @@ def build_local_voice_loop(
     terminal_output: TextIO | None = None,
     transparent_io: bool = True,
     tts_backend: str = "auto",
+    supertonic_voice: str = "M2",
     macos_say_voice: str | None = None,
     macos_say_rate: int | None = None,
 ) -> ManagedVoiceLoop:
@@ -547,6 +593,7 @@ def build_local_voice_loop(
             backend=tts_backend,
             cache_dir=cache_dir,
             tts_voice=tts_voice,
+            supertonic_voice=supertonic_voice,
             tts_lang=tts_lang,
             tts_speed=tts_speed,
             output_device=output_device,
@@ -587,14 +634,28 @@ def _build_speaker(
     backend: str,
     cache_dir: Path,
     tts_voice: str,
+    supertonic_voice: str,
     tts_lang: str,
     tts_speed: float,
     output_device: int | str | None,
     macos_say_voice: str | None,
     macos_say_rate: int | None,
 ) -> tuple[Any, str]:
-    if backend not in {"auto", "kokoro", "macos-say"}:
-        raise ValueError("tts backend must be one of: auto, kokoro, macos-say")
+    if backend not in {"auto", "kokoro", "macos-say", "supertonic"}:
+        raise ValueError(
+            "tts backend must be one of: auto, kokoro, macos-say, supertonic"
+        )
+
+    if backend == "auto" and _should_use_supertonic(tts_lang):
+        return (
+            SupertonicSpeaker.from_cache(
+                voice=supertonic_voice,
+                speed=tts_speed,
+                lang=tts_lang,
+                output_device=output_device,
+            ),
+            "supertonic",
+        )
 
     if backend == "auto" and _should_use_macos_say(tts_lang):
         return (
@@ -603,6 +664,17 @@ def _build_speaker(
                 rate=macos_say_rate,
             ),
             "macos-say",
+        )
+
+    if backend == "supertonic":
+        return (
+            SupertonicSpeaker.from_cache(
+                voice=supertonic_voice,
+                speed=tts_speed,
+                lang=tts_lang,
+                output_device=output_device,
+            ),
+            "supertonic",
         )
 
     if backend == "macos-say":
@@ -626,6 +698,10 @@ def _build_speaker(
         ),
         "kokoro",
     )
+
+
+def _should_use_supertonic(tts_lang: str) -> bool:
+    return tts_lang.casefold().startswith("ko")
 
 
 def _should_use_macos_say(tts_lang: str) -> bool:
@@ -660,6 +736,24 @@ def _default_macos_say_voice(tts_lang: str) -> str | None:
             if parts:
                 return parts[0]
     return None
+
+
+def _supertonic_lang(tts_lang: str) -> str:
+    normalized = tts_lang.casefold()
+    if normalized.startswith("ko"):
+        return "ko"
+    if normalized.startswith("en"):
+        return "en"
+    return normalized.split("-", maxsplit=1)[0]
+
+
+def _mono_audio(audio: Any) -> Any:
+    import numpy as np
+
+    array = np.asarray(audio)
+    if array.ndim == 2 and 1 in array.shape:
+        return array.reshape(-1)
+    return array
 
 
 def _build_keyboard_source(

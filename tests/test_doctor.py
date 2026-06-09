@@ -47,7 +47,14 @@ def test_doctor_returns_success_when_required_runtime_checks_pass(capsys):
     voices_path = cache_dir / "kokoro" / "voices-v1.0.bin"
     probe = FakeProbe(
         commands={"codex": "/usr/bin/codex"},
-        packages={"pexpect", "faster_whisper", "kokoro_onnx", "pipecat", "sounddevice"},
+        packages={
+            "pexpect",
+            "faster_whisper",
+            "kokoro_onnx",
+            "pipecat",
+            "sounddevice",
+            "supertonic",
+        },
         devices=[
             {"name": "Mic", "max_input_channels": 1, "max_output_channels": 0},
             {"name": "Speaker", "max_input_channels": 0, "max_output_channels": 2},
@@ -75,7 +82,14 @@ def test_doctor_returns_success_when_required_runtime_checks_pass(capsys):
 def test_doctor_returns_failure_when_agent_or_audio_is_missing(capsys):
     probe = FakeProbe(
         commands={},
-        packages={"pexpect", "faster_whisper", "kokoro_onnx", "pipecat", "sounddevice"},
+        packages={
+            "pexpect",
+            "faster_whisper",
+            "kokoro_onnx",
+            "pipecat",
+            "sounddevice",
+            "supertonic",
+        },
         devices=[],
     )
 
@@ -95,7 +109,14 @@ def test_doctor_returns_failure_when_agent_or_audio_is_missing(capsys):
 def test_doctor_can_list_audio_devices(capsys):
     probe = FakeProbe(
         commands={"codex": "/usr/bin/codex"},
-        packages={"pexpect", "faster_whisper", "kokoro_onnx", "pipecat", "sounddevice"},
+        packages={
+            "pexpect",
+            "faster_whisper",
+            "kokoro_onnx",
+            "pipecat",
+            "sounddevice",
+            "supertonic",
+        },
         devices=[
             {"name": "Mic", "max_input_channels": 1, "max_output_channels": 0},
             {"name": "Speaker", "max_input_channels": 0, "max_output_channels": 2},
@@ -117,7 +138,14 @@ def test_doctor_can_list_audio_devices(capsys):
 def test_doctor_marks_default_audio_devices(capsys):
     probe = FakeProbe(
         commands={"codex": "/usr/bin/codex"},
-        packages={"pexpect", "faster_whisper", "kokoro_onnx", "pipecat", "sounddevice"},
+        packages={
+            "pexpect",
+            "faster_whisper",
+            "kokoro_onnx",
+            "pipecat",
+            "sounddevice",
+            "supertonic",
+        },
         devices=[
             {"name": "iPhone Microphone", "max_input_channels": 1, "max_output_channels": 0},
             {"name": "WH-1000XM5", "max_input_channels": 1, "max_output_channels": 0},
@@ -143,7 +171,14 @@ def test_doctor_warns_when_kokoro_cache_files_are_too_small(capsys):
     voices_path = cache_dir / "kokoro" / "voices-v1.0.bin"
     probe = FakeProbe(
         commands={"codex": "/usr/bin/codex"},
-        packages={"pexpect", "faster_whisper", "kokoro_onnx", "pipecat", "sounddevice"},
+        packages={
+            "pexpect",
+            "faster_whisper",
+            "kokoro_onnx",
+            "pipecat",
+            "sounddevice",
+            "supertonic",
+        },
         devices=[
             {"name": "Mic", "max_input_channels": 1, "max_output_channels": 0},
             {"name": "Speaker", "max_input_channels": 0, "max_output_channels": 2},

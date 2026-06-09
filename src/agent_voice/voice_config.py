@@ -15,6 +15,9 @@ class VoicePresetError(ValueError):
 class VoiceSettings:
     preset: str
     voice: str
+    kokoro_voice: str
+    supertonic_voice: str
+    macos_say_voice: str | None
     lang: str
     speed: float
     description: str = ""
@@ -25,6 +28,7 @@ def resolve_voice_settings(
     config_path: Path | None = None,
     preset_name: str | None = None,
     voice_override: str | None = None,
+    supertonic_voice_override: str | None = None,
     lang_override: str | None = None,
     speed_override: float | None = None,
 ) -> VoiceSettings:
@@ -38,7 +42,19 @@ def resolve_voice_settings(
         f"presets.{selected_preset}",
         missing_message=f"unknown voice preset '{selected_preset}'",
     )
-    voice = voice_override or _required_str(preset, "voice", selected_preset)
+    preset_voice = _required_any_str(
+        preset,
+        ("voice", "kokoro_voice", "supertonic_voice"),
+        selected_preset,
+    )
+    voice = voice_override or preset_voice
+    kokoro_voice = voice_override or _optional_str(preset, "kokoro_voice") or preset_voice
+    supertonic_voice = (
+        supertonic_voice_override
+        or _optional_str(preset, "supertonic_voice")
+        or preset_voice
+    )
+    macos_say_voice = _optional_str(preset, "macos_say_voice")
     lang = lang_override or _required_str(preset, "lang", selected_preset)
     speed = speed_override if speed_override is not None else _required_float(
         preset,
@@ -50,6 +66,9 @@ def resolve_voice_settings(
     return VoiceSettings(
         preset=selected_preset,
         voice=voice,
+        kokoro_voice=kokoro_voice,
+        supertonic_voice=supertonic_voice,
+        macos_say_voice=macos_say_voice,
         lang=lang,
         speed=speed,
         description=description,
@@ -108,6 +127,28 @@ def _required_str(preset: dict[str, Any], key: str, preset_name: str) -> str:
     if isinstance(value, str) and value:
         return value
     raise VoicePresetError(f"voice preset '{preset_name}' requires string field '{key}'")
+
+
+def _required_any_str(
+    preset: dict[str, Any],
+    keys: tuple[str, ...],
+    preset_name: str,
+) -> str:
+    for key in keys:
+        value = _optional_str(preset, key)
+        if value is not None:
+            return value
+    joined = "', '".join(keys)
+    raise VoicePresetError(
+        f"voice preset '{preset_name}' requires one of string fields '{joined}'"
+    )
+
+
+def _optional_str(preset: dict[str, Any], key: str) -> str | None:
+    value = preset.get(key)
+    if isinstance(value, str) and value:
+        return value
+    return None
 
 
 def _required_float(preset: dict[str, Any], key: str, preset_name: str) -> float:

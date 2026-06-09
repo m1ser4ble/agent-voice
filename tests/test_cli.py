@@ -52,6 +52,7 @@ class FakeDoctorProbe(DoctorProbe):
             "kokoro_onnx",
             "pipecat",
             "sounddevice",
+            "supertonic",
         }
 
     def query_audio_devices(self):
@@ -148,7 +149,13 @@ def test_cli_voice_mode_applies_default_voice_preset():
         ["codex"],
         voice_loop_factory=lambda _, args: (
             captured_settings.append(
-                (args.tts_voice, args.tts_lang, args.tts_speed, args.stt_language)
+                (
+                    args.tts_voice,
+                    args.supertonic_voice,
+                    args.tts_lang,
+                    args.tts_speed,
+                    args.stt_language,
+                )
             )
             or voice_loop
         ),
@@ -156,7 +163,7 @@ def test_cli_voice_mode_applies_default_voice_preset():
     )
 
     assert exit_code == 0
-    assert captured_settings == [("am_michael", "ko", 0.94, "ko")]
+    assert captured_settings == [("am_michael", "M2", "ko", 0.94, "ko")]
 
 
 def test_cli_voice_mode_accepts_audio_device_selection():
@@ -204,11 +211,18 @@ def test_cli_voice_mode_accepts_tts_backend_controls():
             "Yuna",
             "--macos-say-rate",
             "185",
+            "--supertonic-voice",
+            "F2",
             "pi",
         ],
         voice_loop_factory=lambda _, args: (
             captured_settings.append(
-                (args.tts_backend, args.macos_say_voice, args.macos_say_rate)
+                (
+                    args.tts_backend,
+                    args.macos_say_voice,
+                    args.macos_say_rate,
+                    args.supertonic_voice,
+                )
             )
             or voice_loop
         ),
@@ -216,7 +230,7 @@ def test_cli_voice_mode_accepts_tts_backend_controls():
     )
 
     assert exit_code == 0
-    assert captured_settings == [("macos-say", "Yuna", 185)]
+    assert captured_settings == [("macos-say", "Yuna", 185, "F2")]
 
 
 def test_audio_device_parser_accepts_index_or_name():

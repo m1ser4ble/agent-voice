@@ -87,6 +87,7 @@ REQUIRED_PACKAGES: tuple[tuple[str, str], ...] = (
     ("kokoro_onnx", "kokoro-onnx"),
     ("pipecat", "pipecat-ai"),
     ("sounddevice", "sounddevice"),
+    ("supertonic", "supertonic"),
 )
 
 KOKORO_MODEL_FILES: tuple[tuple[str, int], ...] = (
