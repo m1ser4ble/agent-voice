@@ -156,7 +156,7 @@ def test_cli_voice_mode_applies_default_voice_preset():
     )
 
     assert exit_code == 0
-    assert captured_settings == [("am_michael", "en-us", 0.94, "ko")]
+    assert captured_settings == [("am_michael", "ko", 0.94, "ko")]
 
 
 def test_cli_voice_mode_accepts_audio_device_selection():

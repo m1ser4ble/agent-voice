@@ -8,7 +8,7 @@ def test_default_voice_settings_use_bundled_jarvis_style_preset():
 
     assert settings.preset == "jarvis_style"
     assert settings.voice == "am_michael"
-    assert settings.lang == "en-us"
+    assert settings.lang == "ko"
     assert settings.speed == 0.94
     assert "not a celebrity" in settings.description
 

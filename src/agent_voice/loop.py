@@ -154,7 +154,7 @@ class VoiceLoop:
             self._emit("agent_output", raw_output)
         self.session.agent_responded()
 
-        summary = self.presenter.summarize(raw_output)
+        summary = self.presenter.summarize(raw_output, prompt=transcript.text)
         if summary:
             self._emit("speech_summary", summary)
             self._speak_interruptibly(summary)

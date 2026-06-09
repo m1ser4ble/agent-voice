@@ -22,3 +22,18 @@ def test_presenter_returns_first_useful_line_when_no_known_pattern_matches():
     summary = VoicePresenter(language="en").summarize(output)
 
     assert summary == "Done"
+
+
+def test_presenter_skips_echoed_prompt_when_falling_back_to_agent_text():
+    output = """
+ 안녕!
+
+
+ 안녕하세요! 무엇을 도와드릴까요?
+
+────────────────────────────────────────────────────────────────────────────────
+"""
+
+    summary = VoicePresenter(language="ko").summarize(output, prompt="안녕!")
+
+    assert summary == "안녕하세요! 무엇을 도와드릴까요?"

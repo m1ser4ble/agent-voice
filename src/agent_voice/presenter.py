@@ -13,7 +13,7 @@ FAILED_RE = re.compile(r"\b(\d+)\s+failed\b", re.IGNORECASE)
 class VoicePresenter:
     language: str = "ko"
 
-    def summarize(self, output: str) -> str:
+    def summarize(self, output: str, *, prompt: str | None = None) -> str:
         clean = self._strip_ansi(output).strip()
         if not clean:
             return ""
@@ -23,11 +23,16 @@ class VoicePresenter:
         failed = self._first_int(FAILED_RE, clean)
 
         if self.language == "ko":
-            return self._summarize_ko(clean, len(modified_files), passed, failed)
-        return self._summarize_en(clean, len(modified_files), passed, failed)
+            return self._summarize_ko(clean, len(modified_files), passed, failed, prompt)
+        return self._summarize_en(clean, len(modified_files), passed, failed, prompt)
 
     def _summarize_ko(
-        self, clean: str, modified_count: int, passed: int | None, failed: int | None
+        self,
+        clean: str,
+        modified_count: int,
+        passed: int | None,
+        failed: int | None,
+        prompt: str | None,
     ) -> str:
         if failed is not None and failed > 0:
             return f"테스트 {failed}개가 실패했습니다."
@@ -40,10 +45,15 @@ class VoicePresenter:
             return f"파일 {modified_count}개를 수정했습니다."
         if passed is not None:
             return f"테스트 {passed}개는 모두 통과했습니다."
-        return self._first_useful_line(clean)
+        return self._first_useful_line(clean, prompt=prompt)
 
     def _summarize_en(
-        self, clean: str, modified_count: int, passed: int | None, failed: int | None
+        self,
+        clean: str,
+        modified_count: int,
+        passed: int | None,
+        failed: int | None,
+        prompt: str | None,
     ) -> str:
         if failed is not None and failed > 0:
             return f"{failed} tests failed."
@@ -53,7 +63,7 @@ class VoicePresenter:
             return f"Modified {modified_count} files."
         if passed is not None:
             return f"All {passed} tests passed."
-        return self._first_useful_line(clean)
+        return self._first_useful_line(clean, prompt=prompt)
 
     def _modified_files(self, clean: str) -> list[str]:
         lines = clean.splitlines()
@@ -73,12 +83,30 @@ class VoicePresenter:
 
         return files
 
-    def _first_useful_line(self, clean: str) -> str:
+    def _first_useful_line(self, clean: str, *, prompt: str | None = None) -> str:
+        normalized_prompt = self._normalize_echo_line(prompt) if prompt else None
         for line in clean.splitlines():
             stripped = line.strip()
+            if not stripped:
+                continue
+            if self._is_separator_line(stripped):
+                continue
+            if (
+                normalized_prompt is not None
+                and self._normalize_echo_line(stripped) == normalized_prompt
+            ):
+                continue
             if stripped:
                 return stripped[:220]
         return ""
+
+    def _is_separator_line(self, line: str) -> bool:
+        return len(line) >= 8 and not (set(line) - set("─━-_= "))
+
+    def _normalize_echo_line(self, line: str | None) -> str:
+        if line is None:
+            return ""
+        return re.sub(r"\s+", " ", line.strip()).casefold()
 
     def _strip_ansi(self, output: str) -> str:
         return ANSI_ESCAPE_RE.sub("", output)

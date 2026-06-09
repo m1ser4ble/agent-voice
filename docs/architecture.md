@@ -127,8 +127,10 @@ uv run agent-voice --voice-config ./voice-presets.toml codex
 uv run agent-voice --tts-voice af_bella --tts-speed 1.0 codex
 ```
 
-The default preset is `jarvis_style`, which uses a stock Kokoro voice and a
-slower assistant-style speed. It is not a celebrity or character voice clone.
+The default preset is `jarvis_style`, which uses a stock Kokoro voice, Korean
+phonemizer setting, and a slower assistant-style speed. It is not a celebrity
+or character voice clone. Kokoro is still not treated as a dedicated Korean TTS
+model; Korean speech quality remains a provider-tuning concern.
 
 Current verified provider smoke:
 

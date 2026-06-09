@@ -3,9 +3,9 @@ preset = "jarvis_style"
 
 [presets.jarvis_style]
 voice = "am_michael"
-lang = "en-us"
+lang = "ko"
 speed = 0.94
-description = "Measured stock Kokoro male assistant preset; not a celebrity or character voice clone."
+description = "Stock Kokoro male assistant preset with Korean phonemizer; not a celebrity or character voice clone."
 
 [presets.high_quality]
 voice = "af_bella"

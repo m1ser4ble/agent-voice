@@ -85,7 +85,9 @@ output collected from the child process, and the shorter voice summary. Say or
 type `종료` / `exit` to stop the session.
 
 The default Kokoro voice preset is `jarvis_style`. This is a stock Kokoro
-assistant-style preset, not a celebrity or movie-character voice clone.
+assistant-style preset with `tts_lang=ko`, not a celebrity or movie-character
+voice clone. Kokoro is still not a dedicated Korean TTS model, so Korean speech
+quality remains a provider-tuning area.
 
 Pass Codex options after the `codex` target. `agent-voice` does not parse these
 options, so Codex version changes should not require `agent-voice` CLI changes:

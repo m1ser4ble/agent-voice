@@ -137,8 +137,9 @@ uv run agent-voice codex --model <model>
 
 The default voice preset is `jarvis_style`, defined in
 `src/agent_voice/voice_presets.toml`. It is a stock Kokoro assistant-style
-preset, not a celebrity or movie-character voice clone. Override it before the
-target:
+preset with Korean phonemizer setting, not a celebrity or movie-character voice
+clone. Kokoro is still not a dedicated Korean TTS model. Override the preset
+before the target:
 
 ```bash
 uv run agent-voice --voice-preset high_quality codex
