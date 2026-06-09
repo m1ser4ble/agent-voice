@@ -134,6 +134,12 @@ voice, not a celebrity or character voice clone. Kokoro is still not treated as
 a dedicated Korean TTS model; Korean speech quality remains a provider-tuning
 concern when Kokoro is selected.
 
+Default TTS backends must be actively maintained enough to install cleanly in
+the project `uv` environment. Backend candidates that require stale Python
+versions, broken packaging, or conflicting core dependencies should stay out of
+the default runtime and be considered only through isolated external-process
+adapters.
+
 Current verified provider smoke:
 
 ```bash

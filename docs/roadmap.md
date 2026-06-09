@@ -368,6 +368,26 @@ These can be copied into GitHub issues when ready:
 10. Prototype `mobile-xr-companion` mode with fake client tests first.
 11. Measure end-to-end interruption latency for a remote mobile/XR client.
 
+## Rejected Candidates
+
+### MeloTTS as Default TTS Backend
+
+Rejected for the default runtime. MeloTTS has a useful Korean model and a small
+checkpoint, but the current packaging is not suitable for this project:
+
+- The published PyPI package fails to build during `uv add melotts` because its
+  source distribution is missing `requirements.txt`.
+- The official GitHub package resolves to dependencies that conflict with the
+  current Kokoro/NumPy runtime (`gruut` pins NumPy below 2.0 while Kokoro ONNX
+  requires NumPy 2.x).
+- The upstream local-install docs target an older Python baseline, so making it
+  a default dependency would make `uv sync` less reliable for current machines.
+
+MeloTTS should not be used as a built-in backend unless upstream maintenance and
+packaging improve. If a user still needs it, support should be isolated behind
+an external command/process adapter so its dependency graph cannot break the
+main voice runtime.
+
 ## Priority Recommendation
 
 Do not start with mobile UI. First make the core runtime provider boundaries
