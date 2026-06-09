@@ -134,7 +134,7 @@ class VoicePresenter:
                 self._append_block(blocks, current_block)
                 current_block = []
                 continue
-            current_block.append(cleaned_line)
+            self._append_speech_line(current_block, cleaned_line)
 
         self._append_block(blocks, current_block)
 
@@ -151,6 +151,23 @@ class VoicePresenter:
     def _append_block(self, blocks: list[list[str]], block: list[str]) -> None:
         if block:
             blocks.append(block.copy())
+
+    def _append_speech_line(self, block: list[str], line: str) -> None:
+        if not block:
+            block.append(line)
+            return
+
+        normalized_line = self._normalize_echo_line(line)
+        normalized_previous = self._normalize_echo_line(block[-1])
+        if normalized_line == normalized_previous:
+            return
+        if normalized_line.startswith(normalized_previous):
+            block[-1] = line
+            return
+        if normalized_previous.startswith(normalized_line):
+            return
+
+        block.append(line)
 
     def _is_ignored_fallback_line(
         self,

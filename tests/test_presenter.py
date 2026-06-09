@@ -120,3 +120,16 @@ def test_presenter_returns_empty_when_working_spinner_leaves_separator_line():
     summary = VoicePresenter(language="ko").summarize(output, prompt="하나 둘 셋!")
 
     assert summary == ""
+
+
+def test_presenter_keeps_only_latest_streamed_prefix_line():
+    output = """
+네, 들립니다.
+혹시 마이크/음성 입력 테스트
+혹시 마이크/음성 입력 테스트 중이신가요
+혹시 마이크/음성 입력 테스트 중이신가요?
+"""
+
+    summary = VoicePresenter(language="ko").summarize(output, prompt="야, 아, 아")
+
+    assert summary == "네, 들립니다. 혹시 마이크/음성 입력 테스트 중이신가요?"
