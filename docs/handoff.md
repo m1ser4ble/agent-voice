@@ -138,12 +138,14 @@ uv run agent-voice codex --model <model>
 The default voice preset is `jarvis_style`, defined in
 `src/agent_voice/voice_presets.toml`. It is a stock Kokoro assistant-style
 preset with Korean phonemizer setting, not a celebrity or movie-character voice
-clone. Kokoro is still not a dedicated Korean TTS model. Override the preset
-before the target:
+clone. With `--tts-backend auto`, Korean speech on macOS uses the built-in
+`say` command when available; other platforms use Kokoro. Kokoro is still not a
+dedicated Korean TTS model. Override the preset or backend before the target:
 
 ```bash
 uv run agent-voice --voice-preset high_quality codex
 uv run agent-voice --tts-voice af_sarah --tts-speed 1.0 codex
+uv run agent-voice --tts-backend macos-say --macos-say-voice Yuna codex
 uv run agent-voice --voice-config ./voice-presets.toml codex
 ```
 

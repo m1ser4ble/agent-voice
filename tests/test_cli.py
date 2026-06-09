@@ -192,6 +192,33 @@ def test_cli_voice_mode_accepts_keyboard_and_transparency_controls():
     assert captured_flags == [(True, True)]
 
 
+def test_cli_voice_mode_accepts_tts_backend_controls():
+    voice_loop = FakeVoiceLoop()
+    captured_settings = []
+
+    exit_code = main(
+        [
+            "--tts-backend",
+            "macos-say",
+            "--macos-say-voice",
+            "Yuna",
+            "--macos-say-rate",
+            "185",
+            "pi",
+        ],
+        voice_loop_factory=lambda _, args: (
+            captured_settings.append(
+                (args.tts_backend, args.macos_say_voice, args.macos_say_rate)
+            )
+            or voice_loop
+        ),
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert captured_settings == [("macos-say", "Yuna", 185)]
+
+
 def test_audio_device_parser_accepts_index_or_name():
     assert _parse_audio_device("2") == 2
     assert _parse_audio_device("USB Microphone") == "USB Microphone"

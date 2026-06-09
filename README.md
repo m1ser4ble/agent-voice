@@ -84,10 +84,20 @@ completed transcript, the exact input submitted to Codex/Pi, the raw agent
 output collected from the child process, and the shorter voice summary. Say or
 type `종료` / `exit` to stop the session.
 
-The default Kokoro voice preset is `jarvis_style`. This is a stock Kokoro
-assistant-style preset with `tts_lang=ko`, not a celebrity or movie-character
-voice clone. Kokoro is still not a dedicated Korean TTS model, so Korean speech
-quality remains a provider-tuning area.
+The default voice preset is `jarvis_style`. For Korean speech on macOS,
+`--tts-backend auto` uses the built-in `say` command so Korean summaries do not
+go through Kokoro's English-oriented stock voices. Other platforms use Kokoro by
+default. Force a backend when needed:
+
+```bash
+uv run agent-voice --tts-backend macos-say --macos-say-voice Yuna codex
+uv run agent-voice --tts-backend kokoro codex
+```
+
+The bundled Kokoro preset is a stock assistant-style voice, not a celebrity or
+movie-character voice clone. Kokoro is still not a dedicated Korean TTS model,
+so Korean speech quality remains a provider-tuning area when using the Kokoro
+backend.
 
 Pass Codex options after the `codex` target. `agent-voice` does not parse these
 options, so Codex version changes should not require `agent-voice` CLI changes:

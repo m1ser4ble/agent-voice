@@ -127,10 +127,12 @@ uv run agent-voice --voice-config ./voice-presets.toml codex
 uv run agent-voice --tts-voice af_bella --tts-speed 1.0 codex
 ```
 
-The default preset is `jarvis_style`, which uses a stock Kokoro voice, Korean
-phonemizer setting, and a slower assistant-style speed. It is not a celebrity
-or character voice clone. Kokoro is still not treated as a dedicated Korean TTS
-model; Korean speech quality remains a provider-tuning concern.
+The default preset is `jarvis_style`. With `--tts-backend auto`, Korean speech
+on macOS uses the built-in `say` command when it is available; other platforms
+use the Kokoro backend. The bundled Kokoro voice remains a stock assistant-style
+voice, not a celebrity or character voice clone. Kokoro is still not treated as
+a dedicated Korean TTS model; Korean speech quality remains a provider-tuning
+concern when Kokoro is selected.
 
 Current verified provider smoke:
 
@@ -178,7 +180,7 @@ Concrete providers can then change without rewriting the voice loop:
 | --- | --- | --- |
 | Turn detection | Pipecat Smart Turn / VAD | Silero VAD, WebRTC VAD, custom semantic turn detector |
 | Transcription | Whisper | faster-whisper, whisper.cpp, platform STT |
-| Speech | Kokoro | Piper, Coqui, system TTS, hosted TTS if explicitly configured |
+| Speech | Kokoro; macOS `say` for Korean on macOS auto mode | Piper, Coqui, system TTS, hosted TTS if explicitly configured |
 | Agent control | `PexpectAgent` | Pi RPC adapter, Claude structured adapter, tmux adapter |
 | Presentation | `VoicePresenter` | rule-based presenter, LLM-backed presenter, agent-specific presenter |
 

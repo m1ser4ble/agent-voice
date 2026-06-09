@@ -198,6 +198,9 @@ def _build_default_voice_loop(
             keyboard_input=not args.no_keyboard,
             terminal_output=getattr(args, "_agent_voice_output", sys.stdout),
             transparent_io=not args.quiet_agent_io,
+            tts_backend=args.tts_backend,
+            macos_say_voice=args.macos_say_voice,
+            macos_say_rate=args.macos_say_rate,
         )
     except (ImportError, ModuleNotFoundError) as error:
         raise VoiceModeUnavailableError(
@@ -375,6 +378,26 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="Override the Kokoro speech speed from the selected voice preset.",
+    )
+    parser.add_argument(
+        "--tts-backend",
+        choices=("auto", "kokoro", "macos-say"),
+        default="auto",
+        help=(
+            "TTS backend. 'auto' uses macOS say for Korean on macOS, "
+            "otherwise Kokoro."
+        ),
+    )
+    parser.add_argument(
+        "--macos-say-voice",
+        default=None,
+        help="Voice name for the macOS say backend, for example Yuna.",
+    )
+    parser.add_argument(
+        "--macos-say-rate",
+        type=int,
+        default=None,
+        help="Speech rate for the macOS say backend.",
     )
     parser.add_argument(
         "--sample-rate",

@@ -1,15 +1,18 @@
 import time
 from io import StringIO
+from pathlib import Path
 
 import pytest
 
 from agent_voice.providers import (
     KeyboardTranscriptSource,
     KokoroSpeaker,
+    MacOSSaySpeaker,
     ManagedVoiceLoop,
     MergedTranscriptSource,
     MicrophoneWhisperTranscriptSource,
     StderrDownloadReporter,
+    _build_speaker,
     _download_if_missing,
 )
 
@@ -33,6 +36,30 @@ class FakeAudioPlayer:
 
     def stop(self):
         self.stops += 1
+
+
+class FakeProcess:
+    def __init__(self):
+        self.terminated = 0
+        self.killed = 0
+        self.waits = 0
+        self.returncode = None
+
+    def wait(self, timeout=None):
+        self.waits += 1
+        self.returncode = 0
+        return 0
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminated += 1
+        self.returncode = 0
+
+    def kill(self):
+        self.killed += 1
+        self.returncode = 0
 
 
 class FakeLoop:
@@ -120,6 +147,78 @@ def test_sounddevice_player_uses_selected_output_device(monkeypatch):
     SoundDevicePlayer(output_device="USB Speaker").play([0.1], 24000)
 
     assert calls == [([0.1], 24000, True, "USB Speaker")]
+
+
+def test_macos_say_speaker_invokes_say_command(monkeypatch):
+    calls = []
+
+    def fake_popen(command):
+        calls.append(command)
+        return FakeProcess()
+
+    monkeypatch.setattr("agent_voice.providers.subprocess.Popen", fake_popen)
+
+    MacOSSaySpeaker(voice="Yuna", rate=185).say("감사합니다.")
+
+    assert calls == [["say", "-v", "Yuna", "-r", "185", "감사합니다."]]
+
+
+def test_build_speaker_auto_prefers_macos_say_for_korean_on_macos(monkeypatch):
+    def fake_run(command, *, capture_output, text, check):
+        class Result:
+            stdout = "Yuna            ko_KR    # 안녕하세요?\\n"
+
+        return Result()
+
+    monkeypatch.setattr("agent_voice.providers.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("agent_voice.providers.shutil.which", lambda command: "/bin/say")
+    monkeypatch.setattr("agent_voice.providers.subprocess.run", fake_run)
+
+    speaker, backend = _build_speaker(
+        backend="auto",
+        cache_dir=Path(".cache/test"),
+        tts_voice="am_michael",
+        tts_lang="ko",
+        tts_speed=0.94,
+        output_device=None,
+        macos_say_voice=None,
+        macos_say_rate=None,
+    )
+
+    assert backend == "macos-say"
+    assert isinstance(speaker, MacOSSaySpeaker)
+    assert speaker.voice == "Yuna"
+
+
+def test_build_speaker_auto_keeps_kokoro_off_macos(monkeypatch):
+    calls = []
+
+    def fake_from_cache(**kwargs):
+        calls.append(kwargs)
+        return "kokoro-speaker"
+
+    monkeypatch.setattr("agent_voice.providers.platform.system", lambda: "Linux")
+    monkeypatch.setattr(
+        "agent_voice.providers.KokoroSpeaker.from_cache",
+        fake_from_cache,
+    )
+
+    speaker, backend = _build_speaker(
+        backend="auto",
+        cache_dir=Path(".cache/test"),
+        tts_voice="am_michael",
+        tts_lang="ko",
+        tts_speed=0.94,
+        output_device="Speaker",
+        macos_say_voice=None,
+        macos_say_rate=None,
+    )
+
+    assert backend == "kokoro"
+    assert speaker == "kokoro-speaker"
+    assert calls[0]["voice"] == "am_michael"
+    assert calls[0]["lang"] == "ko"
+    assert calls[0]["output_device"] == "Speaker"
 
 
 def test_keyboard_transcript_source_reads_typed_lines():

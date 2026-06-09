@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import platform
 import queue
+import shutil
+import subprocess
 import sys
 import threading
 import urllib.request
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, TextIO
 
@@ -249,6 +252,42 @@ class KokoroSpeaker:
 
 
 @dataclass
+class MacOSSaySpeaker:
+    voice: str | None = None
+    rate: int | None = None
+    _process: subprocess.Popen[Any] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+
+    def say(self, text: str) -> None:
+        self.stop()
+        command = ["say"]
+        if self.voice:
+            command.extend(["-v", self.voice])
+        if self.rate is not None:
+            command.extend(["-r", str(self.rate)])
+        command.append(text)
+
+        self._process = subprocess.Popen(command)
+        try:
+            self._process.wait()
+        finally:
+            self._process = None
+
+    def stop(self) -> None:
+        if self._process is None or self._process.poll() is not None:
+            return
+        self._process.terminate()
+        try:
+            self._process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait(timeout=0.5)
+
+
+@dataclass
 class ManagedVoiceLoop:
     loop: VoiceLoop
     agent: Agent
@@ -483,6 +522,9 @@ def build_local_voice_loop(
     keyboard_input_stream: TextIO | None = None,
     terminal_output: TextIO | None = None,
     transparent_io: bool = True,
+    tts_backend: str = "auto",
+    macos_say_voice: str | None = None,
+    macos_say_rate: int | None = None,
 ) -> ManagedVoiceLoop:
     agent = PexpectAgent(command=command)
     microphone_source = MicrophoneWhisperTranscriptSource(
@@ -501,12 +543,15 @@ def build_local_voice_loop(
         sources.insert(0, keyboard_source)
     transcript_source = MergedTranscriptSource(sources)
     try:
-        speaker = KokoroSpeaker.from_cache(
-            cache_dir=cache_dir / "kokoro",
-            voice=tts_voice,
-            speed=tts_speed,
-            lang=tts_lang,
+        speaker, resolved_tts_backend = _build_speaker(
+            backend=tts_backend,
+            cache_dir=cache_dir,
+            tts_voice=tts_voice,
+            tts_lang=tts_lang,
+            tts_speed=tts_speed,
             output_device=output_device,
+            macos_say_voice=macos_say_voice,
+            macos_say_rate=macos_say_rate,
         )
     except Exception:
         transcript_source.close()
@@ -526,6 +571,7 @@ def build_local_voice_loop(
         keyboard_enabled=keyboard_source is not None,
         language=language,
         whisper_language=whisper_language,
+        tts_backend=resolved_tts_backend,
     )
     return ManagedVoiceLoop(
         loop=loop,
@@ -534,6 +580,86 @@ def build_local_voice_loop(
         status_lines=status_lines if transparent_io else (),
         output=terminal_output,
     )
+
+
+def _build_speaker(
+    *,
+    backend: str,
+    cache_dir: Path,
+    tts_voice: str,
+    tts_lang: str,
+    tts_speed: float,
+    output_device: int | str | None,
+    macos_say_voice: str | None,
+    macos_say_rate: int | None,
+) -> tuple[Any, str]:
+    if backend not in {"auto", "kokoro", "macos-say"}:
+        raise ValueError("tts backend must be one of: auto, kokoro, macos-say")
+
+    if backend == "auto" and _should_use_macos_say(tts_lang):
+        return (
+            MacOSSaySpeaker(
+                voice=macos_say_voice or _default_macos_say_voice(tts_lang),
+                rate=macos_say_rate,
+            ),
+            "macos-say",
+        )
+
+    if backend == "macos-say":
+        if not _macos_say_available():
+            raise RuntimeError("macos-say backend requires the macOS `say` command.")
+        return (
+            MacOSSaySpeaker(
+                voice=macos_say_voice or _default_macos_say_voice(tts_lang),
+                rate=macos_say_rate,
+            ),
+            "macos-say",
+        )
+
+    return (
+        KokoroSpeaker.from_cache(
+            cache_dir=cache_dir / "kokoro",
+            voice=tts_voice,
+            speed=tts_speed,
+            lang=tts_lang,
+            output_device=output_device,
+        ),
+        "kokoro",
+    )
+
+
+def _should_use_macos_say(tts_lang: str) -> bool:
+    return (
+        tts_lang.casefold().startswith("ko")
+        and platform.system() == "Darwin"
+        and _macos_say_available()
+    )
+
+
+def _macos_say_available() -> bool:
+    return shutil.which("say") is not None
+
+
+def _default_macos_say_voice(tts_lang: str) -> str | None:
+    if not tts_lang.casefold().startswith("ko"):
+        return None
+
+    try:
+        result = subprocess.run(
+            ["say", "-v", "?"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+
+    for line in result.stdout.splitlines():
+        if "ko_KR" in line or "Korean" in line:
+            parts = line.split()
+            if parts:
+                return parts[0]
+    return None
 
 
 def _build_keyboard_source(
@@ -561,10 +687,12 @@ def _build_status_lines(
     keyboard_enabled: bool,
     language: str,
     whisper_language: str | None,
+    tts_backend: str,
 ) -> tuple[str, ...]:
     lines = [
         f"agent-voice session started: {' '.join(command)}",
         f"summary language: {language}; stt language: {whisper_language or 'auto'}",
+        f"tts backend: {tts_backend}",
     ]
     if keyboard_enabled:
         lines.append(
