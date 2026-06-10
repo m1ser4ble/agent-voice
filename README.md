@@ -68,6 +68,7 @@ Check local runtime readiness:
 uv run agent-voice doctor
 uv run agent-voice doctor --agent pi --list-devices
 uv run agent-voice doctor --agent none
+uv run agent-voice doctor --agent codex --companion-codex
 ```
 
 `doctor` verifies the current machine. It does not install dependencies or
@@ -75,7 +76,8 @@ download model files; `uv sync` handles Python dependencies, and runtime model
 assets are downloaded by the provider code on first use. If a cached Kokoro
 asset is missing or too small because a download was interrupted/rate-limited,
 runtime will replace it on the next start and print download progress to
-stderr.
+stderr. `--companion-codex` adds read-only checks for the Codex app-server and
+remote TUI flags required by `agent-voice companion codex`.
 
 Voice mode entrypoint:
 

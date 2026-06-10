@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import shutil
+import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -19,6 +20,14 @@ class DoctorOptions:
     list_devices: bool = False
     deep: bool = False
     whisper_model: str = "tiny"
+    companion_codex: bool = False
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    returncode: int
+    stdout: str = ""
+    stderr: str = ""
 
 
 class DoctorProbe(Protocol):
@@ -39,6 +48,14 @@ class DoctorProbe(Protocol):
 
     def default_audio_device(self, kind: str) -> int | None:
         """Return the default sounddevice index for 'input' or 'output'."""
+
+    def run_command(
+        self,
+        command: Sequence[str],
+        *,
+        timeout_seconds: float,
+    ) -> CommandResult:
+        """Run a short read-only command for capability checks."""
 
 
 class SystemDoctorProbe:
@@ -73,6 +90,34 @@ class SystemDoctorProbe:
         except OSError:
             return 0
 
+    def run_command(
+        self,
+        command: Sequence[str],
+        *,
+        timeout_seconds: float,
+    ) -> CommandResult:
+        try:
+            completed = subprocess.run(
+                list(command),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as error:
+            return CommandResult(
+                124,
+                stdout=error.stdout or "",
+                stderr=error.stderr or "command timed out",
+            )
+        except OSError as error:
+            return CommandResult(127, stderr=str(error))
+        return CommandResult(
+            completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+
 
 @dataclass(frozen=True)
 class CheckResult:
@@ -88,6 +133,7 @@ REQUIRED_PACKAGES: tuple[tuple[str, str], ...] = (
     ("pipecat", "pipecat-ai"),
     ("sounddevice", "sounddevice"),
     ("supertonic", "supertonic"),
+    ("livekit", "livekit"),
 )
 
 KOKORO_MODEL_FILES: tuple[tuple[str, int], ...] = (
@@ -133,6 +179,14 @@ def build_doctor_parser(
         default=default_whisper_model,
         help="Whisper model name or path to report for deep checks.",
     )
+    parser.add_argument(
+        "--companion-codex",
+        action="store_true",
+        help=(
+            "Check Codex app-server and remote TUI capabilities needed by "
+            "`agent-voice companion codex`."
+        ),
+    )
     return parser
 
 
@@ -148,6 +202,8 @@ def run_doctor(
     results: list[CheckResult] = []
     results.extend(_check_packages(probe))
     results.extend(_check_agent(options, probe))
+    if options.companion_codex:
+        results.extend(_check_codex_companion(options, probe))
     devices, audio_results = _check_audio_devices(probe)
     results.extend(audio_results)
     results.append(_check_kokoro_cache(options, probe))
@@ -211,6 +267,91 @@ def _check_agent(options: DoctorOptions, probe: DoctorProbe) -> list[CheckResult
             "not found on PATH",
         )
     ]
+
+
+def _check_codex_companion(
+    options: DoctorOptions,
+    probe: DoctorProbe,
+) -> list[CheckResult]:
+    if options.agent not in {"codex", "none"}:
+        return [
+            CheckResult(
+                "fail",
+                "companion codex",
+                "--companion-codex requires --agent codex or --agent none",
+            )
+        ]
+
+    if probe.find_command("codex") is None:
+        return [
+            CheckResult(
+                "fail",
+                "companion codex",
+                "codex command not found on PATH",
+            )
+        ]
+
+    return [
+        _check_codex_app_server_help(probe),
+        _check_codex_remote_resume_help(probe),
+    ]
+
+
+def _check_codex_app_server_help(probe: DoctorProbe) -> CheckResult:
+    result = probe.run_command(
+        ("codex", "app-server", "--help"),
+        timeout_seconds=5.0,
+    )
+    if result.returncode == 0:
+        return CheckResult(
+            "ok",
+            "codex app-server",
+            "`codex app-server --help` succeeded",
+        )
+    return CheckResult(
+        "fail",
+        "codex app-server",
+        _command_failure_detail("codex app-server --help", result),
+    )
+
+
+def _check_codex_remote_resume_help(probe: DoctorProbe) -> CheckResult:
+    result = probe.run_command(
+        ("codex", "resume", "--help"),
+        timeout_seconds=5.0,
+    )
+    if result.returncode != 0:
+        return CheckResult(
+            "fail",
+            "codex remote resume",
+            _command_failure_detail("codex resume --help", result),
+        )
+
+    help_text = f"{result.stdout}\n{result.stderr}"
+    missing = [
+        flag
+        for flag in ("--remote", "--no-alt-screen")
+        if flag not in help_text
+    ]
+    if not missing:
+        return CheckResult(
+            "ok",
+            "codex remote resume",
+            "`codex resume --help` exposes --remote and --no-alt-screen",
+        )
+    return CheckResult(
+        "fail",
+        "codex remote resume",
+        "missing expected option(s): " + ", ".join(missing),
+    )
+
+
+def _command_failure_detail(command: str, result: CommandResult) -> str:
+    detail = (result.stderr or result.stdout).strip()
+    if detail:
+        first_line = detail.splitlines()[0]
+        return f"`{command}` exited {result.returncode}: {first_line}"
+    return f"`{command}` exited {result.returncode}"
 
 
 def _check_audio_devices(

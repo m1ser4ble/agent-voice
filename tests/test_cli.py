@@ -1,7 +1,7 @@
 from io import StringIO
 from pathlib import Path
 
-from agent_voice.doctor import DoctorProbe
+from agent_voice.doctor import CommandResult, DoctorProbe
 from agent_voice.cli import _collect_agent_output, _parse_audio_device, main
 
 
@@ -40,7 +40,7 @@ class FakeVoiceLoop:
 
 class FakeDoctorProbe(DoctorProbe):
     def __init__(self):
-        self.commands = {"pi": "/usr/bin/pi"}
+        self.commands = {"codex": "/usr/bin/codex", "pi": "/usr/bin/pi"}
 
     def find_command(self, command):
         return self.commands.get(command)
@@ -53,6 +53,7 @@ class FakeDoctorProbe(DoctorProbe):
             "pipecat",
             "sounddevice",
             "supertonic",
+            "livekit",
         }
 
     def query_audio_devices(self):
@@ -70,6 +71,19 @@ class FakeDoctorProbe(DoctorProbe):
         if Path(path).name == "voices-v1.0.bin":
             return 1 * 1024 * 1024
         return 0
+
+    def default_audio_device(self, kind):
+        return None
+
+    def run_command(self, command, *, timeout_seconds):
+        if tuple(command) == ("codex", "app-server", "--help"):
+            return CommandResult(0, stdout="Usage: codex app-server --listen <url>")
+        if tuple(command) == ("codex", "resume", "--help"):
+            return CommandResult(
+                0,
+                stdout="Usage: codex resume <id> --remote <url> --no-alt-screen",
+            )
+        return CommandResult(0)
 
 
 def test_cli_codex_once_sends_command_and_prints_voice_summary():
@@ -336,6 +350,20 @@ def test_cli_doctor_runs_runtime_checks_instead_of_agent_target():
     assert voice_loop.runs == 0
     assert "[ok] command pi" in output.getvalue()
     assert "Audio devices:" in output.getvalue()
+
+
+def test_cli_doctor_accepts_companion_codex_check():
+    output = StringIO()
+
+    exit_code = main(
+        ["doctor", "--agent", "codex", "--companion-codex"],
+        doctor_probe=FakeDoctorProbe(),
+        output=output,
+    )
+
+    assert exit_code == 0
+    assert "[ok] codex app-server" in output.getvalue()
+    assert "[ok] codex remote resume" in output.getvalue()
 
 
 def test_cli_companion_codex_runs_foreground_tui_wrapper(tmp_path):
