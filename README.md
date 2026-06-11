@@ -37,7 +37,8 @@ This repo currently contains the local voice MVP core:
 - `VoiceLoop`: coordinates transcript, agent, presenter, speaker, and interrupt
   contracts
 - `MicrophoneWhisperTranscriptSource`: captures mic audio, segments speech with
-  a simple energy gate plus Smart Turn, and transcribes with faster-whisper
+  a simple energy gate plus Smart Turn, and transcribes with faster-whisper or
+  whisper.cpp
 - `KeyboardTranscriptSource`: lets you type a line and press Enter while voice
   mode is still running
 - terminal I/O visibility: prints completed transcripts, submitted agent input,
@@ -131,8 +132,36 @@ uv run agent-voice --tts-backend kokoro --tts-voice af_sarah codex
 `--stt-language ko` controls the Whisper transcription language and is also the
 default. Override it, for example with `--stt-language en`, when you want to
 speak another language.
+For higher Korean STT accuracy on Apple Silicon, use whisper.cpp with the
+`large-v3-q5_0` GGML model:
+
+```bash
+brew install whisper-cpp
+uv run agent-voice \
+  --stt-backend whisper-cpp \
+  --whisper-model large-v3-q5_0 \
+  companion codex
+```
+
+The first run downloads `ggml-large-v3-q5_0.bin` into
+`.cache/agent-voice/whisper.cpp/`. You can also pass an explicit `.bin` path
+with `--whisper-model /path/to/ggml-large-v3-q5_0.bin`.
 Use `--quiet-agent-io` to hide terminal transcript/raw-output events, or
 `--no-keyboard` if you want mic-only input.
+Use `--record-debug-audio` when debugging STT or Smart Turn quality. It writes
+utterance WAV files plus `manifest.jsonl` to `.cache/agent-voice/debug-audio/`
+by default:
+
+```bash
+uv run agent-voice \
+  --record-debug-audio \
+  --debug-audio-dir .cache/agent-voice/debug-audio \
+  companion codex
+```
+
+Each manifest row records the WAV filename, sample rate, transcript, source,
+and stage. `stage=stt_input` is audio that reached STT;
+`stage=smart_turn_incomplete` is audio Smart Turn rejected before STT.
 LiveKit/WebRTC echo cancellation is enabled by default for Supertonic/Kokoro
 playback paths. TTS playback is streamed in 10 ms chunks so the AEC reverse
 stream is fed in playback order, and microphone capture is processed through
@@ -269,9 +298,10 @@ uv run agent-voice --text --once "테스트는?" pi -c
 The default voice path is wired, but it still needs real-device tuning. It uses
 local mic/speaker access through `sounddevice`, downloads Supertonic assets via
 the Hugging Face cache on first Korean TTS use, and uses CPU faster-whisper by
-default. Kokoro downloads its own assets into `.cache/agent-voice/kokoro/` when
-that backend is selected. System PortAudio/microphone permissions must be
-available.
+default. The optional whisper.cpp backend downloads its GGML model into
+`.cache/agent-voice/whisper.cpp/`. Kokoro downloads its own assets into
+`.cache/agent-voice/kokoro/` when that backend is selected. System
+PortAudio/microphone permissions must be available.
 
 ## Why This Exists
 

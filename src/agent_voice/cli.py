@@ -264,6 +264,8 @@ def _build_default_voice_loop(
             cache_dir=Path(args.cache_dir),
             whisper_model=args.whisper_model,
             whisper_language=args.stt_language,
+            stt_backend=args.stt_backend,
+            whisper_cpp_executable=args.whisper_cpp_executable,
             tts_voice=args.tts_voice,
             tts_lang=args.tts_lang,
             tts_speed=args.tts_speed,
@@ -274,6 +276,8 @@ def _build_default_voice_loop(
             keyboard_input=not args.no_keyboard,
             terminal_output=getattr(args, "_agent_voice_output", sys.stdout),
             transparent_io=not args.quiet_agent_io,
+            record_debug_audio=args.record_debug_audio,
+            debug_audio_dir=Path(args.debug_audio_dir),
             tts_backend=args.tts_backend,
             supertonic_voice=args.supertonic_voice,
             macos_say_voice=args.macos_say_voice,
@@ -461,7 +465,22 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--whisper-model",
         default="tiny",
-        help="faster-whisper model name or path.",
+        help=(
+            "faster-whisper model name/path, or whisper.cpp GGML model path. "
+            "With --stt-backend whisper-cpp, the default resolves to "
+            "large-v3-q5_0."
+        ),
+    )
+    parser.add_argument(
+        "--stt-backend",
+        choices=("faster-whisper", "whisper-cpp"),
+        default="faster-whisper",
+        help="Speech-to-text backend.",
+    )
+    parser.add_argument(
+        "--whisper-cpp-executable",
+        default="whisper-cli",
+        help="whisper.cpp CLI executable used by --stt-backend whisper-cpp.",
     )
     parser.add_argument(
         "--stt-language",
@@ -551,6 +570,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Do not print transcript, agent input/output, and summary events.",
     )
     parser.add_argument(
+        "--record-debug-audio",
+        action="store_true",
+        help=(
+            "Record finalized microphone utterances and Smart Turn rejects "
+            "for STT debugging."
+        ),
+    )
+    parser.add_argument(
+        "--debug-audio-dir",
+        default=".cache/agent-voice/debug-audio",
+        help="Directory for --record-debug-audio WAV files and manifest.jsonl.",
+    )
+    parser.add_argument(
         "--no-aec",
         action="store_true",
         help="Disable LiveKit/WebRTC echo cancellation for local TTS playback.",
@@ -631,6 +663,13 @@ def _companion_voice_args(args: argparse.Namespace) -> list[str]:
     _append_changed(voice_args, "--poll-interval", args.poll_interval, 0.2)
     _append_changed(voice_args, "--cache-dir", args.cache_dir, ".cache/agent-voice")
     _append_changed(voice_args, "--whisper-model", args.whisper_model, "tiny")
+    _append_changed(voice_args, "--stt-backend", args.stt_backend, "faster-whisper")
+    _append_changed(
+        voice_args,
+        "--whisper-cpp-executable",
+        args.whisper_cpp_executable,
+        "whisper-cli",
+    )
     _append_changed(voice_args, "--stt-language", args.stt_language, "ko")
     _append_optional(voice_args, "--voice-config", args.voice_config)
     _append_optional(voice_args, "--voice-preset", args.voice_preset)
@@ -647,6 +686,14 @@ def _companion_voice_args(args: argparse.Namespace) -> list[str]:
     _append_optional(voice_args, "--output-device", args.output_device)
     if args.quiet_agent_io:
         voice_args.append("--quiet-agent-io")
+    if args.record_debug_audio:
+        voice_args.append("--record-debug-audio")
+    _append_changed(
+        voice_args,
+        "--debug-audio-dir",
+        args.debug_audio_dir,
+        ".cache/agent-voice/debug-audio",
+    )
     if args.no_aec:
         voice_args.append("--no-aec")
     _append_changed(voice_args, "--aec-delay-ms", args.aec_delay_ms, 120)

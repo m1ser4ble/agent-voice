@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import platform
 import queue
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, TextIO
@@ -29,6 +32,11 @@ KOKORO_VOICES_URL = (
 )
 KOKORO_MODEL_MIN_BYTES = 50 * 1024 * 1024
 KOKORO_VOICES_MIN_BYTES = 1 * 1024 * 1024
+WHISPER_CPP_LARGE_V3_Q5_0_URL = (
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
+    "ggml-large-v3-q5_0.bin"
+)
+WHISPER_CPP_LARGE_V3_Q5_0_MIN_BYTES = 900 * 1024 * 1024
 
 
 class AudioPlayer(Protocol):
@@ -62,6 +70,11 @@ class EchoCanceller(Protocol):
 class Closeable(Protocol):
     def close(self) -> None:
         """Release owned resources."""
+
+
+class Transcriber(Protocol):
+    def transcribe(self, audio: Any, *, sample_rate: int) -> str:
+        """Return a transcript for mono float32 audio."""
 
 
 class DownloadReporter(Protocol):
@@ -532,6 +545,146 @@ class ManagedVoiceLoop:
                 closeable.close()
 
 
+class FasterWhisperTranscriber:
+    def __init__(
+        self,
+        *,
+        model: str,
+        language: str | None,
+        compute_type: str = "int8",
+    ) -> None:
+        from faster_whisper import WhisperModel
+
+        self.language = language
+        self._model = WhisperModel(model, device="cpu", compute_type=compute_type)
+
+    def transcribe(self, audio: Any, *, sample_rate: int) -> str:
+        segments, _ = self._model.transcribe(
+            audio,
+            language=self.language,
+            beam_size=1,
+        )
+        return " ".join(segment.text.strip() for segment in segments).strip()
+
+
+class WhisperCppTranscriber:
+    def __init__(
+        self,
+        *,
+        model_path: Path,
+        executable: str = "whisper-cli",
+        language: str | None = None,
+        beam_size: int = 1,
+        best_of: int = 1,
+        no_fallback: bool = True,
+        runner: Callable[..., Any] = subprocess.run,
+    ) -> None:
+        self.model_path = Path(model_path)
+        self.executable = executable
+        self.language = language
+        self.beam_size = beam_size
+        self.best_of = best_of
+        self.no_fallback = no_fallback
+        self._runner = runner
+
+    def transcribe(self, audio: Any, *, sample_rate: int) -> str:
+        import numpy as np
+        import soundfile as sf
+
+        samples = np.asarray(audio, dtype=np.float32).reshape(-1)
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                temp_path = Path(temp_file.name)
+            sf.write(temp_path, samples, sample_rate, subtype="PCM_16")
+            command = [
+                self.executable,
+                "-m",
+                str(self.model_path),
+                "-f",
+                str(temp_path),
+                "-l",
+                self.language or "auto",
+                "-nt",
+                "-np",
+                "-bs",
+                str(self.beam_size),
+                "-bo",
+                str(self.best_of),
+            ]
+            if self.no_fallback:
+                command.append("-nf")
+            try:
+                result = self._runner(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except FileNotFoundError as error:
+                raise RuntimeError(
+                    "whisper.cpp STT backend requires `whisper-cli` in PATH "
+                    "or --whisper-cpp-executable."
+                ) from error
+
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                raise RuntimeError(
+                    "whisper.cpp transcription failed"
+                    + (f": {detail}" if detail else ".")
+                )
+            return result.stdout.strip()
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+
+
+class DebugAudioRecorder:
+    def __init__(self, directory: Path) -> None:
+        self.directory = Path(directory)
+        self.manifest_path = self.directory / "manifest.jsonl"
+        self._lock = threading.Lock()
+        self._counter = 0
+
+    def record(
+        self,
+        audio: Any,
+        *,
+        sample_rate: int,
+        transcript: str,
+        source: str,
+        stage: str,
+        smart_turn_complete: bool | None = None,
+    ) -> dict[str, Any]:
+        import numpy as np
+        import soundfile as sf
+
+        samples = np.asarray(audio, dtype=np.float32).reshape(-1)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            self._counter += 1
+            sequence = self._counter
+        created_at = time.strftime("%Y%m%dT%H%M%S", time.localtime())
+        audio_name = f"{created_at}-{sequence:06d}-{stage}.wav"
+        audio_path = self.directory / audio_name
+        sf.write(audio_path, samples, sample_rate, subtype="PCM_16")
+        entry: dict[str, Any] = {
+            "created_at": created_at,
+            "sequence": sequence,
+            "audio": audio_name,
+            "sample_rate": sample_rate,
+            "duration_seconds": round(len(samples) / float(sample_rate), 6),
+            "transcript": transcript,
+            "source": source,
+            "stage": stage,
+        }
+        if smart_turn_complete is not None:
+            entry["smart_turn_complete"] = smart_turn_complete
+        with self.manifest_path.open("a", encoding="utf-8") as manifest:
+            manifest.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        return entry
+
+
 class MicrophoneWhisperTranscriptSource:
     def __init__(
         self,
@@ -545,13 +698,17 @@ class MicrophoneWhisperTranscriptSource:
         whisper_model: str = "tiny",
         whisper_language: str | None = None,
         compute_type: str = "int8",
+        stt_backend: str = "faster-whisper",
+        whisper_cpp_executable: str = "whisper-cli",
+        cache_dir: Path | None = None,
+        transcriber: Transcriber | None = None,
+        debug_audio_recorder: DebugAudioRecorder | None = None,
         use_smart_turn: bool = True,
         input_device: int | str | None = None,
         echo_canceller: EchoCanceller | None = None,
     ) -> None:
         import numpy as np
         import sounddevice as sd
-        from faster_whisper import WhisperModel
 
         self._np = np
         self._sd = sd
@@ -565,10 +722,18 @@ class MicrophoneWhisperTranscriptSource:
         self.whisper_language = whisper_language
         self.use_smart_turn = use_smart_turn
         self.echo_canceller = echo_canceller
+        self.debug_audio_recorder = debug_audio_recorder
         self._transcripts: queue.Queue[str] = queue.Queue()
         self._audio_chunks: queue.Queue[Any] = queue.Queue()
         self._stop = threading.Event()
-        self._model = WhisperModel(whisper_model, device="cpu", compute_type=compute_type)
+        self._transcriber = transcriber or _build_transcriber(
+            backend=stt_backend,
+            whisper_model=whisper_model,
+            whisper_language=whisper_language,
+            compute_type=compute_type,
+            whisper_cpp_executable=whisper_cpp_executable,
+            cache_dir=cache_dir or Path(".cache/agent-voice/whisper.cpp"),
+        )
         self._stream = sd.InputStream(
             samplerate=sample_rate,
             channels=1,
@@ -653,17 +818,49 @@ class MicrophoneWhisperTranscriptSource:
 
     def _finalize(self, chunks: Sequence[Any]) -> None:
         audio = self._np.concatenate(chunks).astype(self._np.float32)
-        if self.use_smart_turn and not self._smart_turn_complete(audio):
-            return
+        smart_turn_complete = True
+        if self.use_smart_turn:
+            smart_turn_complete = self._smart_turn_complete(audio)
+            if not smart_turn_complete:
+                self._record_debug_audio(
+                    audio,
+                    transcript="",
+                    stage="smart_turn_incomplete",
+                    smart_turn_complete=False,
+                )
+                return
 
-        segments, _ = self._model.transcribe(
+        transcript = self._transcriber.transcribe(
             audio,
-            language=self.whisper_language,
-            beam_size=1,
+            sample_rate=self.sample_rate,
+        ).strip()
+        self._record_debug_audio(
+            audio,
+            transcript=transcript,
+            stage="stt_input",
+            smart_turn_complete=smart_turn_complete if self.use_smart_turn else None,
         )
-        transcript = " ".join(segment.text.strip() for segment in segments).strip()
         if transcript:
             self._transcripts.put(transcript)
+
+    def _record_debug_audio(
+        self,
+        audio: Any,
+        *,
+        transcript: str,
+        stage: str,
+        smart_turn_complete: bool | None,
+    ) -> None:
+        if self.debug_audio_recorder is None:
+            return
+        self.debug_audio_recorder.record(
+            audio,
+            sample_rate=self.sample_rate,
+            transcript=transcript,
+            source="microphone",
+            stage=stage,
+            smart_turn_complete=smart_turn_complete,
+        )
 
     def _smart_turn_complete(self, audio: Any) -> bool:
         try:
@@ -743,6 +940,8 @@ def build_local_voice_loop(
     cache_dir: Path,
     whisper_model: str = "tiny",
     whisper_language: str | None = None,
+    stt_backend: str = "faster-whisper",
+    whisper_cpp_executable: str = "whisper-cli",
     tts_voice: str = "af_sarah",
     tts_lang: str = "en-us",
     tts_speed: float = 1.0,
@@ -754,6 +953,8 @@ def build_local_voice_loop(
     keyboard_input_stream: TextIO | None = None,
     terminal_output: TextIO | None = None,
     transparent_io: bool = True,
+    record_debug_audio: bool = False,
+    debug_audio_dir: Path | None = None,
     tts_backend: str = "auto",
     supertonic_voice: str = "M2",
     macos_say_voice: str | None = None,
@@ -776,6 +977,14 @@ def build_local_voice_loop(
         vad_threshold=vad_threshold,
         whisper_model=whisper_model,
         whisper_language=whisper_language,
+        stt_backend=stt_backend,
+        whisper_cpp_executable=whisper_cpp_executable,
+        cache_dir=cache_dir / "whisper.cpp",
+        debug_audio_recorder=(
+            DebugAudioRecorder(debug_audio_dir or cache_dir / "debug-audio")
+            if record_debug_audio
+            else None
+        ),
         input_device=input_device,
         echo_canceller=echo_canceller,
     )
@@ -821,6 +1030,9 @@ def build_local_voice_loop(
         whisper_language=whisper_language,
         tts_backend=resolved_tts_backend,
         aec_enabled=aec_enabled,
+        debug_audio_dir=(debug_audio_dir or cache_dir / "debug-audio")
+        if record_debug_audio
+        else None,
     )
     return ManagedVoiceLoop(
         loop=loop,
@@ -936,6 +1148,70 @@ def _build_audio_player(
         echo_canceller=echo_canceller,
         target_sample_rate=aec_sample_rate,
     )
+
+
+def _build_transcriber(
+    *,
+    backend: str,
+    whisper_model: str,
+    whisper_language: str | None,
+    compute_type: str,
+    whisper_cpp_executable: str,
+    cache_dir: Path,
+) -> Transcriber:
+    if backend == "faster-whisper":
+        return FasterWhisperTranscriber(
+            model=whisper_model,
+            language=whisper_language,
+            compute_type=compute_type,
+        )
+
+    if backend == "whisper-cpp":
+        if whisper_model == "tiny":
+            whisper_model = "large-v3-q5_0"
+        return WhisperCppTranscriber(
+            model_path=_resolve_whisper_cpp_model(
+                whisper_model,
+                cache_dir=cache_dir,
+                reporter=StderrDownloadReporter(),
+            ),
+            executable=whisper_cpp_executable,
+            language=whisper_language,
+        )
+
+    raise ValueError("stt backend must be one of: faster-whisper, whisper-cpp")
+
+
+def _resolve_whisper_cpp_model(
+    model: str,
+    *,
+    cache_dir: Path,
+    reporter: DownloadReporter | None = None,
+) -> Path:
+    model_path = Path(model).expanduser()
+    if model_path.is_file() or model_path.is_absolute() or "/" in model:
+        return model_path
+
+    normalized = model
+    if normalized.startswith("ggml-"):
+        normalized = normalized.removeprefix("ggml-")
+    if normalized.endswith(".bin"):
+        normalized = normalized.removesuffix(".bin")
+
+    if normalized != "large-v3-q5_0":
+        raise ValueError(
+            "whisper.cpp model must be a GGML .bin path or the alias "
+            "'large-v3-q5_0'."
+        )
+
+    path = cache_dir / "ggml-large-v3-q5_0.bin"
+    _download_if_missing(
+        WHISPER_CPP_LARGE_V3_Q5_0_URL,
+        path,
+        min_bytes=WHISPER_CPP_LARGE_V3_Q5_0_MIN_BYTES,
+        reporter=reporter,
+    )
+    return path
 
 
 def _should_use_supertonic(tts_lang: str) -> bool:
@@ -1072,6 +1348,7 @@ def _build_status_lines(
     whisper_language: str | None,
     tts_backend: str,
     aec_enabled: bool,
+    debug_audio_dir: Path | None = None,
 ) -> tuple[str, ...]:
     lines = [
         f"agent-voice session started: {' '.join(command)}",
@@ -1079,6 +1356,8 @@ def _build_status_lines(
         f"tts backend: {tts_backend}",
         f"aec: {'livekit' if aec_enabled else 'disabled'}",
     ]
+    if debug_audio_dir is not None:
+        lines.append(f"debug audio: {debug_audio_dir}")
     if keyboard_enabled:
         lines.append(
             "Speak commands, or type a line and press Enter. "
