@@ -370,6 +370,61 @@ def test_cli_companion_codex_runs_foreground_tui_wrapper(tmp_path):
     assert captured[0].codex_args == ("--model", "gpt-5.4")
 
 
+def test_cli_companion_forwards_whisper_cpp_voice_args(tmp_path):
+    captured = []
+
+    exit_code = main(
+        [
+            "--stt-backend",
+            "whisper-cpp",
+            "--whisper-model",
+            "/models/ggml-large-v3-q5_0.bin",
+            "--whisper-cpp-executable",
+            "/opt/homebrew/bin/whisper-cli",
+            "--codex-app-server-port",
+            "4567",
+            "companion",
+            "codex",
+        ],
+        companion_runner=lambda config: captured.append(config) or 0,
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert captured[0].voice_args == (
+        "--whisper-model",
+        "/models/ggml-large-v3-q5_0.bin",
+        "--stt-backend",
+        "whisper-cpp",
+        "--whisper-cpp-executable",
+        "/opt/homebrew/bin/whisper-cli",
+    )
+
+
+def test_cli_companion_forwards_debug_audio_recording_args(tmp_path):
+    captured = []
+    debug_dir = tmp_path / "debug-audio"
+
+    exit_code = main(
+        [
+            "--record-debug-audio",
+            "--debug-audio-dir",
+            str(debug_dir),
+            "companion",
+            "codex",
+        ],
+        companion_runner=lambda config: captured.append(config) or 0,
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert captured[0].voice_args == (
+        "--record-debug-audio",
+        "--debug-audio-dir",
+        str(debug_dir),
+    )
+
+
 def test_cli_companion_codex_resume_uses_thread_id_as_user_expects():
     captured = []
 

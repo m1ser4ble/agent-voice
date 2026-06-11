@@ -1,3 +1,4 @@
+import json
 import time
 from io import StringIO
 from pathlib import Path
@@ -6,6 +7,7 @@ import pytest
 
 from agent_voice.providers import (
     AecAudioPlayer,
+    DebugAudioRecorder,
     KeyboardTranscriptSource,
     KokoroSpeaker,
     LiveKitEchoCanceller,
@@ -15,6 +17,7 @@ from agent_voice.providers import (
     MicrophoneWhisperTranscriptSource,
     StderrDownloadReporter,
     SupertonicSpeaker,
+    WhisperCppTranscriber,
     _build_speaker,
     _download_if_missing,
 )
@@ -55,6 +58,16 @@ class FakeAudioPlayer:
 
     def stop(self):
         self.stops += 1
+
+
+class FakeTranscriber:
+    def __init__(self, text="clean speech"):
+        self.text = text
+        self.calls = []
+
+    def transcribe(self, audio, *, sample_rate):
+        self.calls.append((audio.copy(), sample_rate))
+        return self.text
 
 
 class FakeChunkedAudioPlayer(FakeAudioPlayer):
@@ -613,6 +626,238 @@ def test_microphone_source_transcribes_livekit_echo_cancelled_audio(monkeypatch)
     assert transcript.text == "clean speech"
     assert len(echo_canceller.capture_frames) >= 2
     assert captured_audio[0].max() == pytest.approx(0.25)
+
+
+def test_microphone_source_can_use_injected_transcriber(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    class FakeInputStream:
+        def __init__(self, **kwargs):
+            return None
+
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sounddevice",
+        SimpleNamespace(InputStream=FakeInputStream),
+    )
+
+    transcriber = FakeTranscriber("아까 말했던 수정 전략이 뭔지 설명해줘")
+    source = MicrophoneWhisperTranscriptSource(
+        sample_rate=16000,
+        chunk_ms=10,
+        vad_threshold=0.01,
+        silence_seconds=0.01,
+        min_speech_seconds=0.001,
+        use_smart_turn=False,
+        transcriber=transcriber,
+    )
+    try:
+        source._on_audio(np.full((160, 1), 0.5, dtype=np.float32), 160, None, None)
+        source._on_audio(np.zeros((160, 1), dtype=np.float32), 160, None, None)
+
+        transcript = None
+        for _ in range(50):
+            transcript = source.next_transcript()
+            if transcript is not None:
+                break
+            time.sleep(0.01)
+    finally:
+        source.close()
+
+    assert transcript is not None
+    assert transcript.text == "아까 말했던 수정 전략이 뭔지 설명해줘"
+    assert transcriber.calls[0][1] == 16000
+
+
+def test_debug_audio_recorder_saves_wav_and_manifest(tmp_path):
+    import soundfile as sf
+
+    import numpy as np
+
+    recorder = DebugAudioRecorder(tmp_path)
+
+    entry = recorder.record(
+        np.array([0.0, 0.25, -0.25], dtype=np.float32),
+        sample_rate=16000,
+        transcript="좌우 반전되어 보이는 문제가 있습니다.",
+        source="microphone",
+        stage="stt_input",
+    )
+
+    assert entry["transcript"] == "좌우 반전되어 보이는 문제가 있습니다."
+    assert entry["sample_rate"] == 16000
+    assert entry["source"] == "microphone"
+    assert entry["stage"] == "stt_input"
+    assert (tmp_path / entry["audio"]).is_file()
+
+    audio, sample_rate = sf.read(tmp_path / entry["audio"], dtype="float32")
+    assert sample_rate == 16000
+    assert audio.tolist() == pytest.approx([0.0, 0.25, -0.25], abs=1e-4)
+
+    lines = (tmp_path / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line) for line in lines] == [entry]
+
+
+def test_microphone_source_records_debug_audio_with_transcript(monkeypatch, tmp_path):
+    import sys
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    class FakeInputStream:
+        def __init__(self, **kwargs):
+            return None
+
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sounddevice",
+        SimpleNamespace(InputStream=FakeInputStream),
+    )
+
+    source = MicrophoneWhisperTranscriptSource(
+        sample_rate=16000,
+        chunk_ms=10,
+        vad_threshold=0.01,
+        silence_seconds=0.01,
+        min_speech_seconds=0.001,
+        use_smart_turn=False,
+        transcriber=FakeTranscriber("과우 반전되어 보이는 문제가 있습니다."),
+        debug_audio_recorder=DebugAudioRecorder(tmp_path),
+    )
+    try:
+        source._on_audio(np.full((160, 1), 0.5, dtype=np.float32), 160, None, None)
+        source._on_audio(np.zeros((160, 1), dtype=np.float32), 160, None, None)
+
+        for _ in range(50):
+            if source.next_transcript() is not None:
+                break
+            time.sleep(0.01)
+    finally:
+        source.close()
+
+    entries = [
+        json.loads(line)
+        for line in (tmp_path / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert entries[0]["transcript"] == "과우 반전되어 보이는 문제가 있습니다."
+    assert entries[0]["stage"] == "stt_input"
+    assert (tmp_path / entries[0]["audio"]).is_file()
+
+
+def test_microphone_source_records_smart_turn_rejected_audio(monkeypatch, tmp_path):
+    import sys
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    class FakeInputStream:
+        def __init__(self, **kwargs):
+            return None
+
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
+        def close(self):
+            return None
+
+    class IncompleteSmartTurnSource(MicrophoneWhisperTranscriptSource):
+        def _smart_turn_complete(self, audio):
+            return False
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sounddevice",
+        SimpleNamespace(InputStream=FakeInputStream),
+    )
+
+    source = IncompleteSmartTurnSource(
+        sample_rate=16000,
+        chunk_ms=10,
+        vad_threshold=0.01,
+        silence_seconds=0.01,
+        min_speech_seconds=0.001,
+        use_smart_turn=True,
+        transcriber=FakeTranscriber("should not be used"),
+        debug_audio_recorder=DebugAudioRecorder(tmp_path),
+    )
+    try:
+        source._on_audio(np.full((160, 1), 0.5, dtype=np.float32), 160, None, None)
+        source._on_audio(np.zeros((160, 1), dtype=np.float32), 160, None, None)
+        time.sleep(0.05)
+    finally:
+        source.close()
+
+    assert source.next_transcript() is None
+    entries = [
+        json.loads(line)
+        for line in (tmp_path / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert entries[0]["transcript"] == ""
+    assert entries[0]["stage"] == "smart_turn_incomplete"
+    assert entries[0]["smart_turn_complete"] is False
+
+
+def test_whisper_cpp_transcriber_invokes_cli_with_accuracy_defaults(tmp_path):
+    import numpy as np
+    from types import SimpleNamespace
+
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(
+            returncode=0,
+            stdout=" 아까 말했던 수정 전략이 뭔지 설명해줘. \n",
+            stderr="",
+        )
+
+    transcriber = WhisperCppTranscriber(
+        model_path=tmp_path / "ggml-large-v3-q5_0.bin",
+        executable="whisper-cli",
+        language="ko",
+        runner=fake_run,
+    )
+
+    text = transcriber.transcribe(
+        np.zeros(160, dtype=np.float32),
+        sample_rate=16000,
+    )
+
+    command, kwargs = calls[0]
+    assert text == "아까 말했던 수정 전략이 뭔지 설명해줘."
+    assert command[:2] == ["whisper-cli", "-m"]
+    assert str(tmp_path / "ggml-large-v3-q5_0.bin") in command
+    assert "-nt" in command
+    assert "-np" in command
+    assert command[command.index("-bs") + 1] == "1"
+    assert command[command.index("-bo") + 1] == "1"
+    assert "-nf" in command
+    assert kwargs["capture_output"] is True
+    assert kwargs["text"] is True
 
 
 def test_managed_voice_loop_starts_agent_and_closes_resources():
