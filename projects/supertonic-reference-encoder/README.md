@@ -123,8 +123,9 @@ scripts/download_public_corpora.sh
 This downloads/extracts LibriTTS `dev-clean`, VCTK 0.92, Zeroth-Korean, and
 FLEURS Korean. Common Voice Korean is skipped by default because Mozilla's Data
 Collective flow can require browser-side dataset selection, terms, and
-authenticated download. The FLEURS export step uses temporary `datasets` and
-`torchcodec` dependencies through `uv run --with`.
+authenticated download. The FLEURS export step uses a temporary `datasets`
+dependency through `uv run --with` and exports the raw audio files without
+TorchCodec decoding.
 
 Build one audio-only manifest:
 

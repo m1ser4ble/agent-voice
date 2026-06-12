@@ -76,23 +76,33 @@ if [[ "$INCLUDE_FLEURS_KO" == "1" ]]; then
     mkdir -p "$output_dir"
     echo "downloading/exporting FLEURS ko_kr split=$FLEURS_SPLIT"
     FLEURS_OUTPUT_DIR="$output_dir" FLEURS_SPLIT="$FLEURS_SPLIT" \
-      uv run --with datasets --with torchcodec python - <<'PY'
+      uv run --with datasets python - <<'PY'
 import os
+import shutil
 from pathlib import Path
 
-import soundfile as sf
-from datasets import load_dataset
+from datasets import Audio, load_dataset
 
 output = Path(os.environ["FLEURS_OUTPUT_DIR"])
 split = os.environ["FLEURS_SPLIT"]
 split_dir = output / split
 split_dir.mkdir(parents=True, exist_ok=True)
 
-dataset = load_dataset("google/fleurs", "ko_kr", split=split)
+dataset = load_dataset("google/fleurs", "ko_kr", split=split).cast_column(
+    "audio",
+    Audio(decode=False),
+)
 for index, row in enumerate(dataset):
     audio = row["audio"]
-    path = split_dir / f"{index:08d}.wav"
-    sf.write(path, audio["array"], audio["sampling_rate"], format="WAV")
+    source_path = Path(audio["path"]) if audio.get("path") else None
+    if source_path and source_path.exists():
+        target = split_dir / f"{index:08d}{source_path.suffix.lower() or '.wav'}"
+        shutil.copy2(source_path, target)
+    elif audio.get("bytes") is not None:
+        target = split_dir / f"{index:08d}.wav"
+        target.write_bytes(audio["bytes"])
+    else:
+        raise RuntimeError(f"FLEURS row {index} has neither a local path nor bytes")
 print(f"exported={len(dataset)} path={split_dir}")
 PY
   fi
