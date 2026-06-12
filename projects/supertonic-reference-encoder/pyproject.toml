@@ -1,0 +1,36 @@
+[project]
+name = "supertonic-reference-encoder"
+version = "0.1.0"
+description = "Experimental PyTorch reference encoder for Supertonic voice-style tensors."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "numpy>=2.0.0",
+  "soundfile>=0.14.0",
+  "supertonic>=1.3.1",
+  "torch>=2.4.0",
+  "torchaudio>=2.4.0",
+]
+
+[project.scripts]
+supertonic-autoencoder-train = "supertonic_reference_encoder.speech_autoencoder:main"
+supertonic-preset-dataset = "supertonic_reference_encoder.generate_preset_dataset:main"
+supertonic-reference-predict = "supertonic_reference_encoder.predict:main"
+supertonic-stage-train = "supertonic_reference_encoder.stage_training:main"
+supertonic-reference-train = "supertonic_reference_encoder.train:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/supertonic_reference_encoder"]
