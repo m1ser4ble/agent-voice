@@ -12,7 +12,7 @@ INCLUDE_COMMON_VOICE_KO="${INCLUDE_COMMON_VOICE_KO:-0}"
 
 LIBRITTS_URL="${LIBRITTS_URL:-https://www.openslr.org/resources/60/dev-clean.tar.gz}"
 VCTK_URL="${VCTK_URL:-https://datashare.is.ed.ac.uk/bitstream/handle/10283/3443/VCTK-Corpus-0.92.zip}"
-ZEROTH_URL="${ZEROTH_URL:-https://storage.googleapis.com/zeroth_project/zeroth_korean.tar.gz}"
+ZEROTH_URL="${ZEROTH_URL:-https://openslr.trmal.net/resources/40/zeroth_korean.tar.gz}"
 FLEURS_SPLIT="${FLEURS_SPLIT:-train}"
 
 mkdir -p "$DOWNLOAD_ROOT" "$ARCHIVE_DIR"
