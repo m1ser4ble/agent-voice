@@ -9,9 +9,9 @@ def test_default_voice_settings_use_bundled_jarvis_style_preset():
     assert settings.preset == "jarvis_style"
     assert settings.voice == "am_michael"
     assert settings.kokoro_voice == "am_michael"
-    assert settings.supertonic_voice == "M3"
+    assert settings.supertonic_voice == "M2"
     assert settings.lang == "ko"
-    assert settings.speed == 0.9
+    assert settings.speed == 0.94
     assert "not a celebrity" in settings.description
 
 
@@ -66,7 +66,7 @@ def test_kokoro_voice_override_does_not_replace_supertonic_voice():
     )
 
     assert settings.kokoro_voice == "af_bella"
-    assert settings.supertonic_voice == "M3"
+    assert settings.supertonic_voice == "M2"
 
 
 def test_unknown_voice_preset_is_reported():

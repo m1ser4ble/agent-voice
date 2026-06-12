@@ -98,9 +98,8 @@ When speaker audio leaks back into the microphone, voice mode may print
 
 The default voice preset is `jarvis_style`. With `--tts-backend auto`, Korean
 speech uses Supertonic by default. The bundled `jarvis_style` preset maps to
-Supertonic `M3` at a slightly slower speed for a polished stock
-executive-assistant sound; it is not a celebrity or movie-character voice
-clone. Force a backend when needed:
+Supertonic `M2`, a stock male assistant-style voice; it is not a celebrity or
+movie-character voice clone. Force a backend when needed:
 
 ```bash
 uv run agent-voice --tts-backend supertonic --supertonic-voice F2 codex
@@ -110,12 +109,6 @@ uv run agent-voice --tts-backend kokoro codex
 
 Kokoro is still available as an explicit backend, but it is not treated as the
 default Korean TTS provider.
-
-`--assistant-style jarvis-lite` is enabled by default for Codex app-server
-backends. It injects a restrained executive-assistant developer instruction into
-the Codex thread so commentary and final answers can use concise "sir"-style
-acknowledgements without imitating a specific character. Use
-`--assistant-style none` to disable that prompt layer.
 
 Pass Codex options after the `codex` target. `agent-voice` does not parse these
 options, so Codex version changes should not require `agent-voice` CLI changes:

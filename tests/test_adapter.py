@@ -119,29 +119,6 @@ def test_codex_app_server_agent_starts_thread_with_json_rpc_handshake():
     ]
 
 
-def test_codex_app_server_agent_starts_thread_with_developer_instructions():
-    process = FakeAppServerProcess(
-        [
-            {"id": 1, "result": {}},
-            {"id": 2, "result": {"thread": {"id": "thread-1"}}},
-        ]
-    )
-    agent = CodexAppServerAgent(
-        process_factory=lambda *_args, **_kwargs: process,
-        developer_instructions="Speak like a calm executive assistant.",
-    )
-
-    agent.start()
-
-    assert process.stdin.messages[2] == {
-        "method": "thread/start",
-        "id": 2,
-        "params": {
-            "developerInstructions": "Speak like a calm executive assistant.",
-        },
-    }
-
-
 def test_codex_app_server_agent_submits_turn_and_renders_agent_message_events():
     process = FakeAppServerProcess(
         [

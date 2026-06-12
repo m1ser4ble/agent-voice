@@ -43,19 +43,8 @@ class FakeSupertonic:
         self.styles.append(voice_name)
         return {"voice": voice_name}
 
-    def synthesize(
-        self,
-        text,
-        *,
-        voice_style,
-        speed,
-        total_steps,
-        silence_duration,
-        lang,
-    ):
-        self.calls.append(
-            (text, voice_style, speed, total_steps, silence_duration, lang)
-        )
+    def synthesize(self, text, *, voice_style, speed, lang):
+        self.calls.append((text, voice_style, speed, lang))
         return [[0.1, -0.1, 0.2]], [0.1]
 
 
@@ -254,8 +243,6 @@ def test_supertonic_speaker_synthesizes_and_plays_mono_audio():
             "테스트는 모두 통과했습니다.",
             {"voice": "M2"},
             0.94,
-            12,
-            0.25,
             "ko",
         )
     ]

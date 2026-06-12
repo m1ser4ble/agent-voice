@@ -14,11 +14,6 @@ from agent_voice.adapter import (
     JsonlEventLogger,
     PexpectAgent,
 )
-from agent_voice.assistant_style import (
-    ASSISTANT_STYLE_CHOICES,
-    DEFAULT_ASSISTANT_STYLE,
-    resolve_developer_instructions,
-)
 from agent_voice.companion import CodexTuiCompanionConfig, run_codex_tui_companion
 from agent_voice.doctor import DoctorProbe, build_doctor_parser, run_doctor
 from agent_voice.interrupt import VoiceSession
@@ -335,13 +330,10 @@ def _build_agent(command: tuple[str, ...], args: argparse.Namespace) -> Agent:
     if args.agent_backend == "pexpect":
         return PexpectAgent(command=command)
     event_logger = _build_agent_event_logger(args)
-    developer_instructions = resolve_developer_instructions(args.assistant_style)
     if args.agent_backend == "codex-app-server":
         if command[0] != "codex":
             raise ValueError("codex-app-server backend can only be used with codex")
         kwargs = {"event_logger": event_logger} if event_logger is not None else {}
-        if developer_instructions is not None:
-            kwargs["developer_instructions"] = developer_instructions
         return CodexAppServerAgent(command=command, **kwargs)
     if args.agent_backend == "codex-remote-app-server":
         if command[0] != "codex":
@@ -355,8 +347,6 @@ def _build_agent(command: tuple[str, ...], args: argparse.Namespace) -> Agent:
         }
         if event_logger is not None:
             kwargs["event_logger"] = event_logger
-        if developer_instructions is not None:
-            kwargs["developer_instructions"] = developer_instructions
         return CodexRemoteAppServerAgent(**kwargs)
     raise ValueError(f"unknown agent backend: {args.agent_backend}")
 
@@ -610,15 +600,6 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--assistant-style",
-        choices=ASSISTANT_STYLE_CHOICES,
-        default=DEFAULT_ASSISTANT_STYLE,
-        help=(
-            "Voice companion response style. 'jarvis-lite' is a restrained "
-            "executive-assistant style and does not imitate a character voice."
-        ),
-    )
-    parser.add_argument(
         "--no-aec",
         action="store_true",
         help="Disable LiveKit/WebRTC echo cancellation for local TTS playback.",
@@ -731,12 +712,6 @@ def _companion_voice_args(args: argparse.Namespace) -> list[str]:
         ".cache/agent-voice/debug-audio",
     )
     _append_optional(voice_args, "--debug-agent-events", args.debug_agent_events)
-    _append_changed(
-        voice_args,
-        "--assistant-style",
-        args.assistant_style,
-        DEFAULT_ASSISTANT_STYLE,
-    )
     if args.no_aec:
         voice_args.append("--no-aec")
     _append_changed(voice_args, "--aec-delay-ms", args.aec_delay_ms, 120)
