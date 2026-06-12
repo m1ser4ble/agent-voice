@@ -105,6 +105,31 @@ The reconstruction loss follows the paper's multi-resolution mel setup:
 This stage does not produce `style_ttl/style_dp` yet. It learns the 24-d speech
 latent space that the reference encoders should consume.
 
+Recommended public sample-corpus mix for this stage:
+
+- VCTK: multi-speaker English TTS / voice cloning corpus.
+- LibriTTS `dev-clean` first, then larger train splits if storage allows.
+- Zeroth-Korean: Korean transcribed multi-speaker corpus.
+- FLEURS Korean: smaller Korean speech set, useful as a clean supplement.
+- Common Voice Korean validated clips, if already downloaded from Mozilla Data
+  Collective.
+
+Keep the original corpora outside git, then build one audio-only manifest:
+
+```bash
+uv run supertonic-public-audio-dataset \
+  --output-dir data/public-autoencoder-sample \
+  --copy-mode symlink \
+  --source libritts=/datasets/LibriTTS/dev-clean=2000 \
+  --source vctk=/datasets/VCTK-Corpus/wav48_silence_trimmed=2000 \
+  --source zeroth-ko=/datasets/zeroth_korean=2000 \
+  --source fleurs-ko=/datasets/fleurs/ko_kr=2000 \
+  --source common-voice-ko=/datasets/common_voice_ko=2000
+```
+
+Use `--copy-mode copy` when transferring the prepared dataset to another
+machine. Use `symlink` for local training to avoid duplicating large corpora.
+
 Outputs:
 
 - `config.json`: resolved training config

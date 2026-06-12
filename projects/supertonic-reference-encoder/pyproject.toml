@@ -15,6 +15,7 @@ dependencies = [
 [project.scripts]
 supertonic-autoencoder-train = "supertonic_reference_encoder.speech_autoencoder:main"
 supertonic-preset-dataset = "supertonic_reference_encoder.generate_preset_dataset:main"
+supertonic-public-audio-dataset = "supertonic_reference_encoder.prepare_public_audio_dataset:main"
 supertonic-reference-predict = "supertonic_reference_encoder.predict:main"
 supertonic-stage-train = "supertonic_reference_encoder.stage_training:main"
 supertonic-reference-train = "supertonic_reference_encoder.train:main"
