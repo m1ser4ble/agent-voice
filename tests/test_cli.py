@@ -642,6 +642,40 @@ def test_cli_codex_remote_backend_uses_configured_url_and_thread(monkeypatch):
     ]
 
 
+def test_cli_codex_remote_backend_uses_debug_agent_event_log(monkeypatch, tmp_path):
+    created = []
+    log_path = tmp_path / "events.jsonl"
+
+    class FakeCodexRemoteAppServerAgent(FakeAgent):
+        def __init__(self, **kwargs):
+            super().__init__()
+            created.append(kwargs)
+
+    monkeypatch.setattr(
+        "agent_voice.cli.CodexRemoteAppServerAgent",
+        FakeCodexRemoteAppServerAgent,
+    )
+
+    exit_code = main(
+        [
+            "--agent-backend",
+            "codex-remote-app-server",
+            "--codex-app-server-port",
+            "4500",
+            "--debug-agent-events",
+            str(log_path),
+            "--text",
+            "--once",
+            "테스트는?",
+            "codex",
+        ],
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert created[0]["event_logger"].path == log_path
+
+
 def test_cli_codex_remote_backend_builds_url_from_port(monkeypatch):
     created = []
 

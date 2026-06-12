@@ -1,7 +1,7 @@
 import json
 import queue
 
-from agent_voice.adapter import CodexAppServerAgent, PexpectAgent
+from agent_voice.adapter import CodexAppServerAgent, JsonlEventLogger, PexpectAgent
 
 
 class FakeChild:
@@ -206,6 +206,83 @@ def test_codex_app_server_agent_speaks_final_answer_instead_of_commentary():
     process.stdout.put({"method": "turn/completed", "params": {"status": "completed"}})
 
     assert agent.read_available() == "최종 답변입니다. 요청한 상태를 확인했습니다."
+
+
+def test_codex_app_server_agent_exposes_commentary_as_progress_not_final_output():
+    process = FakeAppServerProcess(
+        [
+            {"id": 1, "result": {}},
+            {"id": 2, "result": {"thread": {"id": "thread-1"}}},
+        ]
+    )
+    agent = CodexAppServerAgent(process_factory=lambda *_args, **_kwargs: process)
+    agent.start()
+    agent.submit("프로젝트 파악해봐")
+
+    process.stdout.put(
+        {
+            "method": "item/completed",
+            "params": {
+                "item": {
+                    "id": "msg-1",
+                    "type": "agentMessage",
+                    "text": "$analyze로 읽기 전용 프로젝트 파악을 진행하겠습니다.",
+                    "phase": "commentary",
+                }
+            },
+        }
+    )
+
+    assert agent.read_available() == ""
+    assert (
+        agent.read_progress_available()
+        == "$analyze로 읽기 전용 프로젝트 파악을 진행하겠습니다."
+    )
+    assert agent.read_progress_available() == ""
+
+
+def test_codex_app_server_agent_logs_raw_events_to_jsonl(tmp_path):
+    process = FakeAppServerProcess(
+        [
+            {"id": 1, "result": {}},
+            {"id": 2, "result": {"thread": {"id": "thread-1"}}},
+        ]
+    )
+    log_path = tmp_path / "events.jsonl"
+    agent = CodexAppServerAgent(
+        process_factory=lambda *_args, **_kwargs: process,
+        event_logger=JsonlEventLogger(log_path),
+    )
+    agent.start()
+    agent.submit("프로젝트 파악해봐")
+    process.stdout.put(
+        {
+            "method": "item/completed",
+            "params": {
+                "item": {
+                    "id": "msg-1",
+                    "type": "agentMessage",
+                    "phase": "commentary",
+                    "text": "프로젝트 구조를 훑겠습니다.",
+                }
+            },
+        }
+    )
+    process.stdout.put({"method": "turn/completed", "params": {"status": "completed"}})
+    agent.read_available()
+
+    rows = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert any(
+        row["direction"] == "send"
+        and row["message"].get("method") == "turn/start"
+        for row in rows
+    )
+    assert any(
+        row["direction"] == "recv"
+        and row["message"].get("method") == "item/completed"
+        and row["message"]["params"]["item"]["phase"] == "commentary"
+        for row in rows
+    )
 
 
 def test_codex_app_server_agent_keeps_unknown_phase_agent_message_compatibility():

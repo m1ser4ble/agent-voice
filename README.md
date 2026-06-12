@@ -198,6 +198,10 @@ uv run agent-voice companion codex resume <thread-id>
 
 The hidden process logs are written under `.cache/agent-voice/companion/` by
 default. Use `--companion-log-dir <path>` to choose another log directory.
+Use `--debug-agent-events <path>` when you need raw Codex app-server JSON-RPC
+send/recv events for debugging presenter or missing-progress behavior.
+Codex `commentary` agent messages are spoken as progress updates; final
+answers still flow through the voice presenter.
 
 Manual/debug equivalent:
 

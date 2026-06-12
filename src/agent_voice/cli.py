@@ -11,6 +11,7 @@ from agent_voice.adapter import (
     Agent,
     CodexAppServerAgent,
     CodexRemoteAppServerAgent,
+    JsonlEventLogger,
     PexpectAgent,
 )
 from agent_voice.companion import CodexTuiCompanionConfig, run_codex_tui_companion
@@ -255,12 +256,6 @@ def _build_default_voice_loop(
         return build_local_voice_loop(
             command=command,
             language=args.language,
-            collect_output=lambda agent: _collect_agent_output(
-                agent,
-                idle_reads=args.idle_reads,
-                max_reads=args.max_reads,
-                poll_interval=args.poll_interval,
-            ),
             cache_dir=Path(args.cache_dir),
             whisper_model=args.whisper_model,
             whisper_language=args.stt_language,
@@ -276,6 +271,9 @@ def _build_default_voice_loop(
             keyboard_input=not args.no_keyboard,
             terminal_output=getattr(args, "_agent_voice_output", sys.stdout),
             transparent_io=not args.quiet_agent_io,
+            output_idle_reads=args.idle_reads,
+            output_max_reads=args.max_reads,
+            output_poll_interval_seconds=args.poll_interval,
             record_debug_audio=args.record_debug_audio,
             debug_audio_dir=Path(args.debug_audio_dir),
             tts_backend=args.tts_backend,
@@ -331,21 +329,32 @@ def _build_agent_command(target: str, agent_args: Sequence[str]) -> tuple[str, .
 def _build_agent(command: tuple[str, ...], args: argparse.Namespace) -> Agent:
     if args.agent_backend == "pexpect":
         return PexpectAgent(command=command)
+    event_logger = _build_agent_event_logger(args)
     if args.agent_backend == "codex-app-server":
         if command[0] != "codex":
             raise ValueError("codex-app-server backend can only be used with codex")
-        return CodexAppServerAgent(command=command)
+        kwargs = {"event_logger": event_logger} if event_logger is not None else {}
+        return CodexAppServerAgent(command=command, **kwargs)
     if args.agent_backend == "codex-remote-app-server":
         if command[0] != "codex":
             raise ValueError(
                 "codex-remote-app-server backend can only be used with codex"
             )
-        return CodexRemoteAppServerAgent(
-            url=_codex_remote_app_server_url(args),
-            thread_id=args.codex_thread_id,
-            cwd=None,
-        )
+        kwargs = {
+            "url": _codex_remote_app_server_url(args),
+            "thread_id": args.codex_thread_id,
+            "cwd": None,
+        }
+        if event_logger is not None:
+            kwargs["event_logger"] = event_logger
+        return CodexRemoteAppServerAgent(**kwargs)
     raise ValueError(f"unknown agent backend: {args.agent_backend}")
+
+
+def _build_agent_event_logger(args: argparse.Namespace) -> JsonlEventLogger | None:
+    if args.debug_agent_events is None:
+        return None
+    return JsonlEventLogger(Path(args.debug_agent_events))
 
 
 def _codex_remote_app_server_url(args: argparse.Namespace) -> str:
@@ -583,6 +592,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Directory for --record-debug-audio WAV files and manifest.jsonl.",
     )
     parser.add_argument(
+        "--debug-agent-events",
+        default=None,
+        help=(
+            "Write raw Codex app-server send/recv JSON-RPC events to this "
+            "JSONL file for debugging."
+        ),
+    )
+    parser.add_argument(
         "--no-aec",
         action="store_true",
         help="Disable LiveKit/WebRTC echo cancellation for local TTS playback.",
@@ -694,6 +711,7 @@ def _companion_voice_args(args: argparse.Namespace) -> list[str]:
         args.debug_audio_dir,
         ".cache/agent-voice/debug-audio",
     )
+    _append_optional(voice_args, "--debug-agent-events", args.debug_agent_events)
     if args.no_aec:
         voice_args.append("--no-aec")
     _append_changed(voice_args, "--aec-delay-ms", args.aec_delay_ms, 120)

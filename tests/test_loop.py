@@ -67,6 +67,71 @@ class FakeAgent:
         return None
 
 
+class ActiveAgent(FakeAgent):
+    def __init__(self, output, *, progress=""):
+        super().__init__(output)
+        self.reads = 0
+        self.active = True
+        self.output_sent = False
+        self.progress = progress
+
+    def read_available(self):
+        self.reads += 1
+        if self.reads < 3:
+            return ""
+        if self.output_sent:
+            return ""
+        self.output_sent = True
+        self.active = False
+        return super().read_available()
+
+    def is_turn_active(self):
+        return self.active
+
+    def read_progress_available(self):
+        progress = self.progress
+        self.progress = ""
+        return progress
+
+
+class DelayedOutputAgent(FakeAgent):
+    def __init__(self, output):
+        super().__init__(output)
+        self.reads = 0
+
+    def read_available(self):
+        self.reads += 1
+        if self.reads < 3:
+            return ""
+        return super().read_available()
+
+
+class ThinkingInputSource:
+    def __init__(self):
+        self.polls = 0
+
+    def next_transcript(self):
+        self.polls += 1
+        if self.polls == 1:
+            return Transcript("큰 프로젝트 파악해봐", source="microphone")
+        if self.polls == 2:
+            return Transcript("아니 테스트부터 봐줘", source="microphone")
+        return None
+
+
+class ThinkingKeyboardInputSource:
+    def __init__(self):
+        self.polls = 0
+
+    def next_transcript(self):
+        self.polls += 1
+        if self.polls == 1:
+            return Transcript("큰 프로젝트 파악해봐", source="keyboard")
+        if self.polls == 2:
+            return Transcript("아니 테스트부터 봐줘", source="keyboard")
+        return None
+
+
 class FakeSpeaker:
     def __init__(self):
         self.said = []
@@ -346,6 +411,113 @@ def test_voice_loop_polls_for_interrupts_while_speech_is_playing():
         SessionState.INTERRUPTED,
         SessionState.LISTENING,
     ]
+
+
+def test_voice_loop_speaks_agent_progress_and_accepts_input_while_agent_runs():
+    source = ThinkingInputSource()
+    agent = ActiveAgent(
+        "Tests:\n1 passed\n",
+        progress="$analyze로 읽기 전용 프로젝트 파악을 진행하겠습니다.",
+    )
+    speaker = FakeSpeaker()
+    observer = FakeObserver()
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        output_idle_reads=1,
+        output_max_reads=5,
+        output_poll_interval_seconds=0,
+        observer=observer,
+    )
+
+    handled = loop.run_once()
+
+    assert handled is True
+    assert agent.submitted == ["큰 프로젝트 파악해봐", "아니 테스트부터 봐줘"]
+    assert speaker.said[0] == "$analyze로 읽기 전용 프로젝트 파악을 진행하겠습니다."
+    assert (
+        "agent_progress",
+        "$analyze로 읽기 전용 프로젝트 파악을 진행하겠습니다.",
+        "unknown",
+    ) in [
+        (event.kind, event.text, event.source) for event in observer.events
+    ]
+    assert ("agent_input", "아니 테스트부터 봐줘", "microphone") in [
+        (event.kind, event.text, event.source) for event in observer.events
+    ]
+
+
+def test_voice_loop_does_not_speak_canned_progress_without_agent_progress():
+    source = FakeTranscriptSource([Transcript("-", source="keyboard")])
+    agent = ActiveAgent("무엇을 도와드릴까요?")
+    speaker = FakeSpeaker()
+    observer = FakeObserver()
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        output_idle_reads=1,
+        output_max_reads=5,
+        output_poll_interval_seconds=0,
+        observer=observer,
+    )
+
+    handled = loop.run_once()
+
+    assert handled is True
+    assert "작업을 진행하고 있어요." not in speaker.said
+    assert not any(event.kind == "agent_progress" for event in observer.events)
+    assert ("agent_progress", "작업을 진행하고 있어요.", "unknown") not in [
+        (event.kind, event.text, event.source) for event in observer.events
+    ]
+
+
+def test_voice_loop_submits_keyboard_input_while_agent_runs_instead_of_queueing():
+    source = ThinkingKeyboardInputSource()
+    agent = ActiveAgent("Tests:\n1 passed\n")
+    speaker = FakeSpeaker()
+    observer = FakeObserver()
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        output_idle_reads=1,
+        output_max_reads=5,
+        output_poll_interval_seconds=0,
+        observer=observer,
+    )
+
+    handled = loop.run_once()
+
+    assert handled is True
+    assert agent.submitted == ["큰 프로젝트 파악해봐", "아니 테스트부터 봐줘"]
+    assert ("queued_transcript", "아니 테스트부터 봐줘", "keyboard") not in [
+        (event.kind, event.text, event.source) for event in observer.events
+    ]
+
+
+def test_voice_loop_waits_for_first_delayed_output_without_turn_active_signal():
+    source = FakeTranscriptSource(["프로젝트 파악해봐"])
+    agent = DelayedOutputAgent("Tests:\n1 passed\n")
+    speaker = FakeSpeaker()
+    loop = VoiceLoop(
+        transcript_source=source,
+        agent=agent,
+        presenter=VoicePresenter(language="ko"),
+        speaker=speaker,
+        output_idle_reads=1,
+        output_max_reads=5,
+        output_poll_interval_seconds=0,
+    )
+
+    handled = loop.run_once()
+
+    assert handled is True
+    assert "테스트 1개는 모두 통과했습니다." in speaker.said
 
 
 def test_voice_loop_filters_self_echo_before_interrupts_while_speaking():

@@ -43,6 +43,7 @@ VoiceLoopEventKind = Literal[
     "agent_input",
     "agent_output",
     "speech_summary",
+    "agent_progress",
     "interrupt",
     "exit",
     "queued_transcript",
@@ -93,6 +94,9 @@ class VoiceLoop:
     observer: VoiceLoopObserver | None = None
     speech_poll_interval_seconds: float = 0.05
     speech_join_timeout_seconds: float = 1.0
+    output_idle_reads: int = 4
+    output_max_reads: int = 600
+    output_poll_interval_seconds: float = 0.2
     self_echo_window_seconds: float = 8.0
     self_echo_similarity_threshold: float = 0.68
     self_echo_token_overlap_threshold: float = 0.78
@@ -171,7 +175,7 @@ class VoiceLoop:
         self.session.heard_command()
         self._emit("agent_input", transcript.text, source=transcript.source)
         self.agent.submit(transcript.text)
-        raw_output = self._collect_output()
+        raw_output = self._collect_output_interruptibly()
         if raw_output:
             self._emit("agent_output", raw_output)
         self.session.agent_responded()
@@ -247,6 +251,68 @@ class VoiceLoop:
         if self.collect_output is not None:
             return self.collect_output(self.agent)
         return self.agent.read_available()
+
+    def _collect_output_interruptibly(self) -> str:
+        if self.collect_output is not None:
+            return self._collect_output()
+
+        chunks: list[str] = []
+        empty_reads = 0
+
+        for _ in range(self.output_max_reads):
+            transcript = self._next_transcript(include_pending=False)
+            if transcript is not None:
+                self._handle_thinking_transcript(transcript)
+                if self.should_exit:
+                    break
+
+            chunk = self.agent.read_available()
+            if chunk:
+                chunks.append(chunk)
+                empty_reads = 0
+            else:
+                empty_reads += 1
+                turn_active = getattr(self.agent, "is_turn_active", lambda: False)()
+                if chunks and empty_reads >= self.output_idle_reads and not turn_active:
+                    break
+
+            progress = self._read_agent_progress()
+            if progress:
+                self._speak_agent_progress(progress)
+
+            if self.output_poll_interval_seconds > 0:
+                time.sleep(self.output_poll_interval_seconds)
+
+        return "".join(chunks)
+
+    def _read_agent_progress(self) -> str:
+        reader = getattr(self.agent, "read_progress_available", None)
+        if reader is None:
+            return ""
+        return reader()
+
+    def _speak_agent_progress(self, text: str) -> None:
+        self._emit("agent_progress", text)
+        self._remember_spoken_text(text)
+        self.speaker.say(text)
+
+    def _handle_thinking_transcript(self, transcript: TranscriptInput) -> None:
+        transcript = self._clean_transcript(transcript)
+        if transcript is None:
+            return
+
+        self._emit("transcript", transcript.text, source=transcript.source)
+        if self._ignore_self_echo(transcript):
+            return
+        if self._should_exit(transcript.text):
+            self._emit("exit", transcript.text, source=transcript.source)
+            self.speaker.stop()
+            self.agent.stop()
+            self.should_exit = True
+            return
+
+        self._emit("agent_input", transcript.text, source=transcript.source)
+        self.agent.submit(transcript.text)
 
     def _should_exit(self, transcript: str) -> bool:
         normalized = transcript.casefold()

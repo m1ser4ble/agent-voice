@@ -147,6 +147,10 @@ class TerminalVoiceObserver:
             print(f"[voice summary] {event.text}", file=output, flush=True)
             return
 
+        if event.kind == "agent_progress":
+            print(f"[agent progress] {event.text}", file=output, flush=True)
+            return
+
         if event.kind == "interrupt":
             print(f"[interrupt] {event.text}", file=output, flush=True)
             return
@@ -936,7 +940,7 @@ def build_local_voice_loop(
     *,
     command: tuple[str, ...],
     language: str,
-    collect_output: CollectOutput,
+    collect_output: CollectOutput | None = None,
     cache_dir: Path,
     whisper_model: str = "tiny",
     whisper_language: str | None = None,
@@ -953,6 +957,9 @@ def build_local_voice_loop(
     keyboard_input_stream: TextIO | None = None,
     terminal_output: TextIO | None = None,
     transparent_io: bool = True,
+    output_idle_reads: int = 4,
+    output_max_reads: int = 600,
+    output_poll_interval_seconds: float = 0.2,
     record_debug_audio: bool = False,
     debug_audio_dir: Path | None = None,
     tts_backend: str = "auto",
@@ -1019,6 +1026,9 @@ def build_local_voice_loop(
         presenter=VoicePresenter(language=language),
         speaker=speaker,
         collect_output=collect_output,
+        output_idle_reads=output_idle_reads,
+        output_max_reads=output_max_reads,
+        output_poll_interval_seconds=output_poll_interval_seconds,
         observer=(
             TerminalVoiceObserver(terminal_output) if transparent_io else None
         ),

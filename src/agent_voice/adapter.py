@@ -33,6 +33,28 @@ class Agent(Protocol):
 ProcessFactory = Callable[..., Any]
 
 
+class EventLogger(Protocol):
+    def log(self, *, direction: str, message: Mapping[str, Any]) -> None:
+        """Persist a raw agent transport message."""
+
+
+class JsonlEventLogger:
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self._lock = threading.Lock()
+
+    def log(self, *, direction: str, message: Mapping[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        row = {
+            "ts": time.time(),
+            "direction": direction,
+            "message": message,
+        }
+        with self._lock:
+            with self.path.open("a", encoding="utf-8") as file:
+                file.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 @dataclass
 class PexpectAgent:
     command: Sequence[str] = ("codex",)
@@ -103,6 +125,7 @@ class CodexAppServerAgent:
     request_timeout_seconds: float = 5.0
     read_grace_seconds: float = 0.05
     process_factory: ProcessFactory | None = None
+    event_logger: EventLogger | None = None
     _process: Any = field(default=None, init=False, repr=False)
     _reader: threading.Thread | None = field(default=None, init=False, repr=False)
     _messages: queue.Queue[dict[str, Any]] = field(
@@ -120,6 +143,11 @@ class CodexAppServerAgent:
         repr=False,
     )
     _unknown_phase_agent_messages: list[str] = field(
+        default_factory=list,
+        init=False,
+        repr=False,
+    )
+    _progress_messages: list[str] = field(
         default_factory=list,
         init=False,
         repr=False,
@@ -183,6 +211,11 @@ class CodexAppServerAgent:
     def is_turn_active(self) -> bool:
         return self._turn_active
 
+    def read_progress_available(self) -> str:
+        text = "".join(self._progress_messages)
+        self._progress_messages.clear()
+        return text
+
     def stop(self) -> None:
         process = self._process
         if process is None:
@@ -227,6 +260,7 @@ class CodexAppServerAgent:
             except json.JSONDecodeError:
                 continue
             if isinstance(message, dict):
+                self._log_event(direction="recv", message=message)
                 self._messages.put(message)
 
     def _request(
@@ -251,8 +285,14 @@ class CodexAppServerAgent:
         stdin = getattr(process, "stdin", None)
         if stdin is None:
             raise RuntimeError("codex app-server stdin is unavailable")
+        self._log_event(direction="send", message=message)
         stdin.write(json.dumps(message) + "\n")
         stdin.flush()
+
+    def _log_event(self, *, direction: str, message: Mapping[str, Any]) -> None:
+        if self.event_logger is None:
+            return
+        self.event_logger.log(direction=direction, message=message)
 
     def _wait_for_response(self, request_id: int) -> dict[str, Any]:
         deadline = time.monotonic() + self.request_timeout_seconds
@@ -280,6 +320,7 @@ class CodexAppServerAgent:
     def _reset_turn_output(self) -> None:
         self._agent_message_deltas.clear()
         self._unknown_phase_agent_messages.clear()
+        self._progress_messages.clear()
         self._has_final_agent_message = False
 
     def _handle_notification(self, message: Mapping[str, Any]) -> str:
@@ -319,7 +360,9 @@ class CodexAppServerAgent:
         if phase == "final_answer":
             self._has_final_agent_message = True
             return text
-        if phase in {"commentary", "interim"}:
+        if phase == "commentary":
+            if text:
+                self._progress_messages.append(text)
             return ""
 
         if text:
@@ -435,12 +478,14 @@ class CodexRemoteAppServerAgent(CodexAppServerAgent):
             except (OSError, ValueError, TimeoutError):
                 continue
             if isinstance(message, dict):
+                self._log_event(direction="recv", message=message)
                 self._messages.put(message)
 
     def _send(self, message: dict[str, Any]) -> None:
         connection = self._connection
         if connection is None:
             raise RuntimeError("codex app-server websocket is unavailable")
+        self._log_event(direction="send", message=message)
         connection.send_json(message)
 
     def _handle_notification(self, message: Mapping[str, Any]) -> str:
