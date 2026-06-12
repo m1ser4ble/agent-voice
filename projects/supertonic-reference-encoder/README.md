@@ -117,18 +117,45 @@ Recommended public sample-corpus mix for this stage:
 Keep the original corpora outside git, then build one audio-only manifest:
 
 ```bash
-uv run supertonic-public-audio-dataset \
-  --output-dir data/public-autoencoder-sample \
-  --copy-mode symlink \
-  --source libritts=/datasets/LibriTTS/dev-clean=2000 \
-  --source vctk=/datasets/VCTK-Corpus/wav48_silence_trimmed=2000 \
-  --source zeroth-ko=/datasets/zeroth_korean=2000 \
-  --source fleurs-ko=/datasets/fleurs/ko_kr=2000 \
-  --source common-voice-ko=/datasets/common_voice_ko=2000
+scripts/prepare_public_autoencoder_sample.sh
 ```
 
-Use `--copy-mode copy` when transferring the prepared dataset to another
-machine. Use `symlink` for local training to avoid duplicating large corpora.
+By default, the script takes up to 2,000 files from each corpus path:
+
+```text
+/datasets/LibriTTS/dev-clean
+/datasets/VCTK-Corpus/wav48_silence_trimmed
+/datasets/zeroth_korean
+/datasets/fleurs/ko_kr
+/datasets/common_voice_ko
+```
+
+Override paths or caps with environment variables:
+
+```bash
+SAMPLES_PER_SOURCE=5000 \
+LIBRITTS_ROOT=/mnt/data/LibriTTS/dev-clean \
+ZEROTH_ROOT=/mnt/data/zeroth_korean \
+scripts/prepare_public_autoencoder_sample.sh
+```
+
+Use `COPY_MODE=copy` when transferring the prepared dataset to another machine.
+The default `symlink` mode avoids duplicating large local corpora.
+
+Train on CUDA with batch size 16:
+
+```bash
+scripts/train_autoencoder_cuda.sh
+```
+
+Resume from a previous checkpoint:
+
+```bash
+RESUME=runs/autoencoder-public-cuda/best.pt \
+OUTPUT_DIR=runs/autoencoder-public-cuda-ft1 \
+LEARNING_RATE=0.00005 \
+scripts/train_autoencoder_cuda.sh
+```
 
 Outputs:
 
