@@ -4,10 +4,10 @@ preset = "jarvis_style"
 [presets.jarvis_style]
 voice = "am_michael"
 kokoro_voice = "am_michael"
-supertonic_voice = "M2"
+supertonic_voice = "M3"
 lang = "ko"
-speed = 0.94
-description = "Stock male assistant-style preset; not a celebrity or character voice clone."
+speed = 0.9
+description = "Polished stock male executive-assistant style; not a celebrity or character voice clone."
 
 [presets.high_quality]
 voice = "af_bella"

@@ -126,6 +126,7 @@ class CodexAppServerAgent:
     read_grace_seconds: float = 0.05
     process_factory: ProcessFactory | None = None
     event_logger: EventLogger | None = None
+    developer_instructions: str | None = None
     _process: Any = field(default=None, init=False, repr=False)
     _reader: threading.Thread | None = field(default=None, init=False, repr=False)
     _messages: queue.Queue[dict[str, Any]] = field(
@@ -175,7 +176,7 @@ class CodexAppServerAgent:
             },
         )
         self._notify("initialized", {})
-        thread = self._request("thread/start", {})["thread"]
+        thread = self._request("thread/start", self._thread_params())["thread"]
         self._thread_id = thread["id"]
 
     def submit(self, text: str) -> None:
@@ -245,6 +246,12 @@ class CodexAppServerAgent:
             text=True,
             bufsize=1,
         )
+
+    def _thread_params(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        resolved = dict(params or {})
+        if self.developer_instructions is not None:
+            resolved["developerInstructions"] = self.developer_instructions
+        return resolved
 
     def _read_stdout(self) -> None:
         process = self._process
@@ -421,14 +428,17 @@ class CodexRemoteAppServerAgent(CodexAppServerAgent):
         self._notify("initialized", {})
 
         if self.thread_id:
-            thread = self._request("thread/resume", {"threadId": self.thread_id})[
-                "thread"
-            ]
+            thread = self._request(
+                "thread/resume",
+                self._thread_params({"threadId": self.thread_id}),
+            )["thread"]
         else:
             params: dict[str, Any] = {}
             if self.cwd is not None:
                 params["cwd"] = str(self.cwd)
-            thread = self._request("thread/start", params)["thread"]
+            thread = self._request("thread/start", self._thread_params(params))[
+                "thread"
+            ]
         self._thread_id = thread["id"]
 
     def submit(self, text: str) -> None:

@@ -450,6 +450,8 @@ class SupertonicSpeaker:
     voice: str = "M2"
     speed: float = 1.0
     lang: str = "ko"
+    total_steps: int = 12
+    silence_duration: float = 0.25
     sample_rate: int = 44100
 
     @classmethod
@@ -481,6 +483,8 @@ class SupertonicSpeaker:
             text,
             voice_style=style,
             speed=self.speed,
+            total_steps=self.total_steps,
+            silence_duration=self.silence_duration,
             lang=_supertonic_lang(self.lang),
         )
         self.player.play(_mono_audio(audio), self.sample_rate)

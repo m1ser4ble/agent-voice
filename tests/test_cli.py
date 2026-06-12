@@ -177,7 +177,7 @@ def test_cli_voice_mode_applies_default_voice_preset():
     )
 
     assert exit_code == 0
-    assert captured_settings == [("am_michael", "M2", "ko", 0.94, "ko")]
+    assert captured_settings == [("am_michael", "M3", "ko", 0.9, "ko")]
 
 
 def test_cli_voice_mode_accepts_audio_device_selection():
@@ -453,6 +453,24 @@ def test_cli_companion_forwards_debug_audio_recording_args(tmp_path):
     )
 
 
+def test_cli_companion_forwards_non_default_assistant_style():
+    captured = []
+
+    exit_code = main(
+        [
+            "--assistant-style",
+            "none",
+            "companion",
+            "codex",
+        ],
+        companion_runner=lambda config: captured.append(config) or 0,
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert captured[0].voice_args == ("--assistant-style", "none")
+
+
 def test_cli_companion_codex_resume_uses_thread_id_as_user_expects():
     captured = []
 
@@ -556,12 +574,12 @@ def test_cli_pi_text_once_uses_pi_target_with_passthrough_args():
 
 
 def test_cli_codex_app_server_backend_uses_structured_codex_agent(monkeypatch):
-    created_commands = []
+    created = []
 
     class FakeCodexAppServerAgent(FakeAgent):
-        def __init__(self, command):
+        def __init__(self, command, **kwargs):
             super().__init__()
-            created_commands.append(command)
+            created.append((command, kwargs))
 
     monkeypatch.setattr(
         "agent_voice.cli.CodexAppServerAgent",
@@ -581,7 +599,41 @@ def test_cli_codex_app_server_backend_uses_structured_codex_agent(monkeypatch):
     )
 
     assert exit_code == 0
-    assert created_commands == [("codex",)]
+    assert created[0][0] == ("codex",)
+    assert "sir" in created[0][1]["developer_instructions"].casefold()
+
+
+def test_cli_assistant_style_none_disables_developer_instructions(monkeypatch):
+    created = []
+
+    class FakeCodexRemoteAppServerAgent(FakeAgent):
+        def __init__(self, **kwargs):
+            super().__init__()
+            created.append(kwargs)
+
+    monkeypatch.setattr(
+        "agent_voice.cli.CodexRemoteAppServerAgent",
+        FakeCodexRemoteAppServerAgent,
+    )
+
+    exit_code = main(
+        [
+            "--agent-backend",
+            "codex-remote-app-server",
+            "--codex-app-server-port",
+            "4500",
+            "--assistant-style",
+            "none",
+            "--text",
+            "--once",
+            "테스트는?",
+            "codex",
+        ],
+        output=StringIO(),
+    )
+
+    assert exit_code == 0
+    assert "developer_instructions" not in created[0]
 
 
 def test_cli_codex_remote_backend_requires_url_or_port():
@@ -633,13 +685,10 @@ def test_cli_codex_remote_backend_uses_configured_url_and_thread(monkeypatch):
     )
 
     assert exit_code == 0
-    assert created == [
-        {
-            "url": "ws://127.0.0.1:4500",
-            "thread_id": "thread-123",
-            "cwd": None,
-        }
-    ]
+    assert created[0]["url"] == "ws://127.0.0.1:4500"
+    assert created[0]["thread_id"] == "thread-123"
+    assert created[0]["cwd"] is None
+    assert "sir" in created[0]["developer_instructions"].casefold()
 
 
 def test_cli_codex_remote_backend_uses_debug_agent_event_log(monkeypatch, tmp_path):
