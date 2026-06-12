@@ -114,13 +114,25 @@ Recommended public sample-corpus mix for this stage:
 - Common Voice Korean validated clips, if already downloaded from Mozilla Data
   Collective.
 
-Keep the original corpora outside git, then build one audio-only manifest:
+Download the public corpora to `/datasets`:
+
+```bash
+scripts/download_public_corpora.sh
+```
+
+This downloads/extracts LibriTTS `dev-clean`, VCTK 0.92, Zeroth-Korean, and
+FLEURS Korean. Common Voice Korean is skipped by default because Mozilla's Data
+Collective flow can require browser-side dataset selection, terms, and
+authenticated download.
+
+Build one audio-only manifest:
 
 ```bash
 scripts/prepare_public_autoencoder_sample.sh
 ```
 
-By default, the script takes up to 2,000 files from each corpus path:
+By default, the prepare script takes up to 2,000 files from each existing corpus
+path:
 
 ```text
 /datasets/LibriTTS/dev-clean
@@ -129,6 +141,9 @@ By default, the script takes up to 2,000 files from each corpus path:
 /datasets/fleurs/ko_kr
 /datasets/common_voice_ko
 ```
+
+Missing corpus roots are skipped, so the pipeline still runs when Common Voice
+has not been downloaded.
 
 Override paths or caps with environment variables:
 
