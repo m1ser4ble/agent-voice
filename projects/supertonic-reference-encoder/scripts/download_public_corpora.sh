@@ -76,7 +76,7 @@ if [[ "$INCLUDE_FLEURS_KO" == "1" ]]; then
     mkdir -p "$output_dir"
     echo "downloading/exporting FLEURS ko_kr split=$FLEURS_SPLIT"
     FLEURS_OUTPUT_DIR="$output_dir" FLEURS_SPLIT="$FLEURS_SPLIT" \
-      uv run --with datasets python - <<'PY'
+      uv run --with datasets --with torchcodec python - <<'PY'
 import os
 from pathlib import Path
 
