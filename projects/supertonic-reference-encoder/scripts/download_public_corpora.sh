@@ -52,20 +52,35 @@ extract_zip() {
 
 if [[ "$INCLUDE_LIBRITTS" == "1" ]]; then
   archive="$ARCHIVE_DIR/libritts-dev-clean.tar.gz"
-  download_file "$LIBRITTS_URL" "$archive"
-  extract_tar_gz "$archive" "$DOWNLOAD_ROOT/LibriTTS/dev-clean"
+  marker="$DOWNLOAD_ROOT/LibriTTS/dev-clean"
+  if [[ -e "$marker" ]]; then
+    echo "already extracted: $marker"
+  else
+    download_file "$LIBRITTS_URL" "$archive"
+    extract_tar_gz "$archive" "$marker"
+  fi
 fi
 
 if [[ "$INCLUDE_VCTK" == "1" ]]; then
   archive="$ARCHIVE_DIR/VCTK-Corpus-0.92.zip"
-  download_file "$VCTK_URL" "$archive"
-  extract_zip "$archive" "$DOWNLOAD_ROOT/VCTK-Corpus/wav48_silence_trimmed"
+  marker="$DOWNLOAD_ROOT/VCTK-Corpus-0.92/wav48_silence_trimmed"
+  if [[ -e "$marker" ]]; then
+    echo "already extracted: $marker"
+  else
+    download_file "$VCTK_URL" "$archive"
+    extract_zip "$archive" "$marker"
+  fi
 fi
 
 if [[ "$INCLUDE_ZEROTH" == "1" ]]; then
   archive="$ARCHIVE_DIR/zeroth_korean.tar.gz"
-  download_file "$ZEROTH_URL" "$archive"
-  extract_tar_gz "$archive" "$DOWNLOAD_ROOT/zeroth_korean"
+  marker="$DOWNLOAD_ROOT/zeroth_korean"
+  if [[ -e "$marker" ]]; then
+    echo "already extracted: $marker"
+  else
+    download_file "$ZEROTH_URL" "$archive"
+    extract_tar_gz "$archive" "$marker"
+  fi
 fi
 
 if [[ "$INCLUDE_FLEURS_KO" == "1" ]]; then

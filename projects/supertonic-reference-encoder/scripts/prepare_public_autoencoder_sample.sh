@@ -6,12 +6,27 @@ cd "$(dirname "$0")/.."
 SAMPLES_PER_SOURCE="${SAMPLES_PER_SOURCE:-2000}"
 OUTPUT_DIR="${OUTPUT_DIR:-data/public-autoencoder-sample}"
 COPY_MODE="${COPY_MODE:-symlink}"
+DOWNLOAD_ROOT="${DOWNLOAD_ROOT:-/datasets}"
 
-LIBRITTS_ROOT="${LIBRITTS_ROOT:-/datasets/LibriTTS/dev-clean}"
-VCTK_ROOT="${VCTK_ROOT:-/datasets/VCTK-Corpus/wav48_silence_trimmed}"
-ZEROTH_ROOT="${ZEROTH_ROOT:-/datasets/zeroth_korean}"
-FLEURS_KO_ROOT="${FLEURS_KO_ROOT:-/datasets/fleurs/ko_kr}"
-COMMON_VOICE_KO_ROOT="${COMMON_VOICE_KO_ROOT:-/datasets/common_voice_ko}"
+resolve_first_dir() {
+  local fallback=""
+  for candidate in "$@"; do
+    if [[ -n "$candidate" && -z "$fallback" ]]; then
+      fallback="$candidate"
+    fi
+    if [[ -n "$candidate" && -d "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  printf '%s\n' "$fallback"
+}
+
+LIBRITTS_ROOT="$(resolve_first_dir "${LIBRITTS_ROOT:-}" "$DOWNLOAD_ROOT/LibriTTS/dev-clean")"
+VCTK_ROOT="$(resolve_first_dir "${VCTK_ROOT:-}" "$DOWNLOAD_ROOT/VCTK-Corpus-0.92/wav48_silence_trimmed" "$DOWNLOAD_ROOT/VCTK-Corpus/wav48_silence_trimmed" "$DOWNLOAD_ROOT/VCTK-Corpus-0.92")"
+ZEROTH_ROOT="$(resolve_first_dir "${ZEROTH_ROOT:-}" "$DOWNLOAD_ROOT/zeroth_korean" "$DOWNLOAD_ROOT/zeroth_korean/train_data_01")"
+FLEURS_KO_ROOT="$(resolve_first_dir "${FLEURS_KO_ROOT:-}" "$DOWNLOAD_ROOT/fleurs/ko_kr" "$DOWNLOAD_ROOT/fleurs/ko_kr/train")"
+COMMON_VOICE_KO_ROOT="$(resolve_first_dir "${COMMON_VOICE_KO_ROOT:-}" "$DOWNLOAD_ROOT/common_voice_ko")"
 
 sources=()
 
