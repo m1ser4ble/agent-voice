@@ -54,12 +54,21 @@ def _read_audio_with_ffmpeg(path: Path, *, sample_rate: int):
             subprocess.run(
                 command,
                 check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
             )
         except FileNotFoundError as exc:
             raise RuntimeError(
                 f"ffmpeg is required to decode audio unsupported by soundfile: {path}"
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            if len(stderr) > 2000:
+                stderr = stderr[-2000:]
+            raise RuntimeError(
+                "ffmpeg failed to decode audio "
+                f"path={path} returncode={exc.returncode} stderr={stderr!r}"
             ) from exc
         return sf.read(wav_path, dtype="float32", always_2d=True)
 
