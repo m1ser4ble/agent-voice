@@ -15,6 +15,8 @@ def load_audio(
     sample_rate: int,
     max_seconds: float | None = None,
 ) -> torch.Tensor:
+    if not path.exists():
+        raise FileNotFoundError(f"audio file does not exist: {path}")
     audio, input_sample_rate = _read_audio(path, sample_rate=sample_rate)
     waveform = torch.from_numpy(audio).mean(dim=1)
     if input_sample_rate != sample_rate:

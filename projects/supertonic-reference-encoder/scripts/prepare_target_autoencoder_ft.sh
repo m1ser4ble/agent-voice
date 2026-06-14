@@ -12,6 +12,17 @@ WINDOW_SECONDS="${WINDOW_SECONDS:-3.0}"
 HOP_SECONDS="${HOP_SECONDS:-3.0}"
 MIN_WINDOW_SECONDS="${MIN_WINDOW_SECONDS:-1.0}"
 
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  echo "ffmpeg not found. Install ffmpeg before preparing MP3 target audio." >&2
+  exit 1
+fi
+
+if [[ ! -f "$TARGET_AUDIO" ]]; then
+  echo "target audio not found: $TARGET_AUDIO" >&2
+  echo "Set TARGET_AUDIO=/path/to/reference.wav-or-mp3." >&2
+  exit 1
+fi
+
 args=(
   uv run supertonic-target-audio-dataset
   --target-audio "$TARGET_AUDIO"

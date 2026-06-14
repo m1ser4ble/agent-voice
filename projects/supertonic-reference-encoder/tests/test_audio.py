@@ -17,6 +17,19 @@ def test_load_audio_reads_wav(tmp_path):
     assert waveform.shape == (1600,)
 
 
+def test_load_audio_reports_missing_file_before_decoder_fallback(tmp_path):
+    missing = tmp_path / "missing.mp3"
+
+    try:
+        load_audio(missing, sample_rate=16_000)
+    except FileNotFoundError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("expected FileNotFoundError")
+
+    assert str(missing) in message
+
+
 def test_load_audio_falls_back_to_ffmpeg_when_soundfile_fails(tmp_path, monkeypatch):
     source = tmp_path / "voice.mp3"
     source.write_bytes(b"not really mp3")
