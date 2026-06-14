@@ -31,11 +31,41 @@ resolve_first_dir() {
   printf '%s\n' "$fallback"
 }
 
+find_common_voice_ko_root() {
+  local root="$1"
+  local clips_dir
+  local language_dir
+
+  if [[ ! -d "$root" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r clips_dir; do
+    language_dir="$(dirname "$clips_dir")"
+    if [[ -f "$language_dir/validated.tsv" || -f "$language_dir/train.tsv" || -f "$language_dir/test.tsv" || -f "$language_dir/clip_durations.tsv" ]]; then
+      printf '%s\n' "$language_dir"
+      return 0
+    fi
+    case "$clips_dir" in
+      *common_voice*|*cv-corpus*|*/ko/clips)
+        printf '%s\n' "$language_dir"
+        return 0
+        ;;
+    esac
+  done < <(find "$root" -maxdepth 6 -type d -name clips 2>/dev/null | sort)
+}
+
 LIBRITTS_ROOT="$(resolve_first_dir "${LIBRITTS_ROOT:-}" "$DOWNLOAD_ROOT/LibriTTS/dev-clean")"
 VCTK_ROOT="$(resolve_first_dir "${VCTK_ROOT:-}" "$DOWNLOAD_ROOT/VCTK-Corpus-0.92/wav48_silence_trimmed" "$DOWNLOAD_ROOT/VCTK-Corpus/wav48_silence_trimmed" "$DOWNLOAD_ROOT/wav48_silence_trimmed" "$DOWNLOAD_ROOT/wav48_slience_trimmed" "$DOWNLOAD_ROOT/VCTK-Corpus-0.92")"
 ZEROTH_ROOT="$(resolve_first_dir "${ZEROTH_ROOT:-}" "$DOWNLOAD_ROOT/zeroth_korean" "$DOWNLOAD_ROOT/zeroth_korean/train_data_01" "$DOWNLOAD_ROOT/train_data_01")"
 FLEURS_KO_ROOT="$(resolve_first_dir "${FLEURS_KO_ROOT:-}" "$DOWNLOAD_ROOT/fleurs/ko_kr" "$DOWNLOAD_ROOT/fleurs/ko_kr/train")"
 COMMON_VOICE_KO_ROOT="$(resolve_first_dir "${COMMON_VOICE_KO_ROOT:-}" "$DOWNLOAD_ROOT/common_voice_ko" "$DOWNLOAD_ROOT/common_voice_ko/ko" "$DOWNLOAD_ROOT/common_voice_ko/clips" "$DOWNLOAD_ROOT/cv-corpus-"*"/ko" "$DOWNLOAD_ROOT/cv-corpus-"*"/ko/clips" "$DOWNLOAD_ROOT/ko" "$DOWNLOAD_ROOT/ko/clips")"
+if [[ ! -d "$COMMON_VOICE_KO_ROOT" ]]; then
+  DISCOVERED_COMMON_VOICE_KO_ROOT="$(find_common_voice_ko_root "$DOWNLOAD_ROOT")"
+  if [[ -n "$DISCOVERED_COMMON_VOICE_KO_ROOT" ]]; then
+    COMMON_VOICE_KO_ROOT="$DISCOVERED_COMMON_VOICE_KO_ROOT"
+  fi
+fi
 
 sources=()
 
