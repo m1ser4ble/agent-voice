@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import tempfile
 
 import soundfile as sf
 import torch
@@ -13,7 +15,7 @@ def load_audio(
     sample_rate: int,
     max_seconds: float | None = None,
 ) -> torch.Tensor:
-    audio, input_sample_rate = sf.read(path, dtype="float32", always_2d=True)
+    audio, input_sample_rate = _read_audio(path, sample_rate=sample_rate)
     waveform = torch.from_numpy(audio).mean(dim=1)
     if input_sample_rate != sample_rate:
         waveform = torchaudio.functional.resample(
@@ -25,6 +27,41 @@ def load_audio(
         max_samples = int(sample_rate * max_seconds)
         waveform = waveform[:max_samples]
     return waveform.contiguous()
+
+
+def _read_audio(path: Path, *, sample_rate: int):
+    try:
+        return sf.read(path, dtype="float32", always_2d=True)
+    except Exception:
+        return _read_audio_with_ffmpeg(path, sample_rate=sample_rate)
+
+
+def _read_audio_with_ffmpeg(path: Path, *, sample_rate: int):
+    with tempfile.TemporaryDirectory(prefix="supertonic-audio-") as temp_dir:
+        wav_path = Path(temp_dir) / "decoded.wav"
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(path),
+            "-ac",
+            "1",
+            "-ar",
+            str(sample_rate),
+            str(wav_path),
+        ]
+        try:
+            subprocess.run(
+                command,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"ffmpeg is required to decode audio unsupported by soundfile: {path}"
+            ) from exc
+        return sf.read(wav_path, dtype="float32", always_2d=True)
 
 
 class LogMelExtractor:
