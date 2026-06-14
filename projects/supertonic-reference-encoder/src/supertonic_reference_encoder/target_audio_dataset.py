@@ -225,7 +225,13 @@ def _read_manifest_with_absolute_audio(path: Path) -> list[dict[str, object]]:
         if not line.strip():
             continue
         record = json.loads(line)
-        record["audio"] = str(_resolve(root, str(record["audio"])))
+        audio_path = _resolve(root, str(record["audio"]))
+        source_audio = record.get("source_audio")
+        if not audio_path.exists() and isinstance(source_audio, str):
+            source_audio_path = Path(source_audio)
+            if source_audio_path.exists():
+                audio_path = source_audio_path
+        record["audio"] = str(audio_path)
         records.append(record)
     return records
 

@@ -17,6 +17,26 @@ def test_validate_audio_manifest_reports_missing_relative_audio(tmp_path):
     assert len(result.missing) == 1
     assert result.missing[0].line_number == 1
     assert str(tmp_path / "missing.wav") == str(result.missing[0].path)
+    assert result.missing[0].symlink_target is None
+
+
+def test_validate_audio_manifest_reports_broken_symlink_target(tmp_path):
+    target = tmp_path / "missing-target.wav"
+    link = tmp_path / "linked.wav"
+    link.symlink_to(target)
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(
+        json.dumps({"audio": "linked.wav"}) + "\n",
+        encoding="utf-8",
+    )
+
+    result = validate_audio_manifest(manifest)
+
+    assert result.total_count == 1
+    assert result.existing_count == 0
+    assert len(result.missing) == 1
+    assert result.missing[0].path == link
+    assert result.missing[0].symlink_target == target
 
 
 def test_validate_audio_manifest_accepts_existing_absolute_audio(tmp_path):

@@ -73,6 +73,43 @@ def test_prepare_target_audio_dataset_builds_mixed_manifest_with_repeated_target
     assert [record["dataset"] for record in records[1:]] == ["target-jarvis"] * 3
 
 
+def test_prepare_target_audio_dataset_falls_back_to_source_audio_for_broken_symlink(tmp_path):
+    public_audio = tmp_path / "public.wav"
+    target = tmp_path / "jarvis.wav"
+    broken_link = tmp_path / "public-link.wav"
+    _write_wav(public_audio, seconds=1.0)
+    _write_wav(target, seconds=1.0)
+    broken_link.symlink_to(tmp_path / "missing-public.wav")
+    public_manifest = tmp_path / "public_manifest.jsonl"
+    public_manifest.write_text(
+        json.dumps(
+            {
+                "audio": "public-link.wav",
+                "source_audio": str(public_audio),
+                "dataset": "public",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = prepare_target_audio_dataset(
+        TargetAudioDatasetConfig(
+            target_audio=target,
+            output_dir=tmp_path / "mixed",
+            public_manifest=public_manifest,
+            target_repeat=1,
+            sample_rate=16_000,
+            window_seconds=1.0,
+            hop_seconds=1.0,
+            augmentations=("original",),
+        )
+    )
+
+    records = _read_jsonl(result.mixed_manifest)
+    assert records[0]["audio"] == str(public_audio)
+
+
 def test_normalize_target_audio_uses_ffmpeg_for_non_wav_sources(tmp_path):
     source = tmp_path / "voice.mp3"
     source.write_bytes(b"fake mp3")

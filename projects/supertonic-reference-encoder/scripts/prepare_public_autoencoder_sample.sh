@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 SAMPLES_PER_SOURCE="${SAMPLES_PER_SOURCE:-2000}"
 OUTPUT_DIR="${OUTPUT_DIR:-data/public-autoencoder-sample}"
-COPY_MODE="${COPY_MODE:-symlink}"
+COPY_MODE="${COPY_MODE:-copy}"
 DOWNLOAD_ROOT="${DOWNLOAD_ROOT:-/datasets}"
 
 resolve_first_dir() {

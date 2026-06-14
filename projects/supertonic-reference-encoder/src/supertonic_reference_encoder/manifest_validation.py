@@ -12,6 +12,7 @@ from supertonic_reference_encoder.data import _resolve
 class MissingAudio:
     line_number: int
     path: Path
+    symlink_target: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -38,7 +39,14 @@ def validate_audio_manifest(manifest: Path) -> ManifestValidationResult:
         if audio_path.exists():
             existing_count += 1
         else:
-            missing.append(MissingAudio(line_number=line_number, path=audio_path))
+            symlink_target = audio_path.readlink() if audio_path.is_symlink() else None
+            missing.append(
+                MissingAudio(
+                    line_number=line_number,
+                    path=audio_path,
+                    symlink_target=symlink_target,
+                )
+            )
     return ManifestValidationResult(
         manifest=manifest,
         total_count=total_count,
@@ -63,7 +71,10 @@ def main(argv: list[str] | None = None) -> int:
     if result.missing:
         print(f"missing={len(result.missing)}")
         for item in result.missing[: args.max_missing]:
-            print(f"missing line={item.line_number} path={item.path}")
+            message = f"missing line={item.line_number} path={item.path}"
+            if item.symlink_target is not None:
+                message += f" broken_symlink_target={item.symlink_target}"
+            print(message)
         return 1
     print("missing=0")
     return 0
