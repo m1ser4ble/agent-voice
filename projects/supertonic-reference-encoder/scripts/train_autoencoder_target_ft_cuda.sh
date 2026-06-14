@@ -36,6 +36,8 @@ if [[ ! -f "$VALIDATION_AUDIO" ]]; then
   exit 1
 fi
 
+uv run supertonic-check-audio-manifest --manifest "$MANIFEST"
+
 uv run supertonic-autoencoder-train \
   --manifest "$MANIFEST" \
   --output-dir "$OUTPUT_DIR" \
