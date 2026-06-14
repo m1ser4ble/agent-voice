@@ -35,6 +35,7 @@ args=(
 )
 
 if [[ -f "$PUBLIC_MANIFEST" ]]; then
+  uv run supertonic-check-audio-manifest --manifest "$PUBLIC_MANIFEST"
   args+=(--public-manifest "$PUBLIC_MANIFEST")
 else
   echo "public manifest not found, preparing target-only manifest: $PUBLIC_MANIFEST" >&2

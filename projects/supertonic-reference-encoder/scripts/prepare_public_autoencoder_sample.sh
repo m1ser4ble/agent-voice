@@ -120,6 +120,11 @@ add_source_if_present "zeroth-ko" "$ZEROTH_ROOT"
 add_source_if_present "fleurs-ko" "$FLEURS_KO_ROOT"
 add_source_if_present "common-voice-ko" "$COMMON_VOICE_KO_ROOT"
 
+echo "prepare_public_autoencoder_sample:"
+echo "  download_root=$DOWNLOAD_ROOT"
+echo "  output_dir=$OUTPUT_DIR"
+echo "  copy_mode=$COPY_MODE"
+
 if [[ "${#sources[@]}" -eq 0 ]]; then
   cat >&2 <<'EOF'
 No corpus roots were found. Run scripts/download_public_corpora.sh first, or set

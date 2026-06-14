@@ -156,8 +156,10 @@ ZEROTH_ROOT=/mnt/data/zeroth_korean \
 scripts/prepare_public_autoencoder_sample.sh
 ```
 
-Use `COPY_MODE=copy` when transferring the prepared dataset to another machine.
-The default `symlink` mode avoids duplicating large local corpora.
+The default `COPY_MODE=copy` stores selected audio files inside the prepared
+dataset so manifests remain portable across machines. Use `COPY_MODE=symlink`
+only when training on the same machine and you want to avoid duplicating local
+corpora.
 
 Train on CUDA with batch size 16:
 
@@ -180,6 +182,10 @@ Fine-tune toward a target processed voice, such as a Jarvis-like reference:
 scripts/prepare_target_autoencoder_ft.sh
 scripts/train_autoencoder_target_ft_cuda.sh
 ```
+
+The target fine-tune training script regenerates the default mixed manifest
+before training so stale `data/autoencoder-public-plus-target/manifest.jsonl`
+paths do not survive after rebuilding `data/public-autoencoder-sample`.
 
 Defaults:
 

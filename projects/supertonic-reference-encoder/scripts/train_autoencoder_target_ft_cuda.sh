@@ -12,10 +12,20 @@ BATCH_SIZE="${BATCH_SIZE:-16}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 MAX_SECONDS="${MAX_SECONDS:-3.0}"
 LEARNING_RATE="${LEARNING_RATE:-0.00003}"
+AUTO_PREPARE_MANIFEST="${AUTO_PREPARE_MANIFEST:-1}"
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
   echo "ffmpeg not found. Install ffmpeg before training with MP3 validation audio." >&2
   exit 1
+fi
+
+if [[ "$AUTO_PREPARE_MANIFEST" == "1" ]]; then
+  if [[ "$MANIFEST" != "data/autoencoder-public-plus-target/manifest.jsonl" ]]; then
+    echo "AUTO_PREPARE_MANIFEST=1 only regenerates the default manifest path; using existing MANIFEST=$MANIFEST" >&2
+  else
+    echo "regenerating target fine-tune manifest before training: $MANIFEST"
+    OUTPUT_DIR="$(dirname "$MANIFEST")" scripts/prepare_target_autoencoder_ft.sh
+  fi
 fi
 
 if [[ ! -f "$MANIFEST" ]]; then
