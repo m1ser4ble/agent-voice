@@ -6,6 +6,7 @@ import soundfile as sf
 
 from supertonic_reference_encoder.target_audio_dataset import (
     TargetAudioDatasetConfig,
+    normalize_target_audio,
     prepare_target_audio_dataset,
 )
 
@@ -70,3 +71,26 @@ def test_prepare_target_audio_dataset_builds_mixed_manifest_with_repeated_target
     assert result.mixed_sample_count == 4
     assert records[0]["dataset"] == "public"
     assert [record["dataset"] for record in records[1:]] == ["target-jarvis"] * 3
+
+
+def test_normalize_target_audio_uses_ffmpeg_for_non_wav_sources(tmp_path):
+    source = tmp_path / "voice.mp3"
+    source.write_bytes(b"fake mp3")
+    calls = []
+
+    def fake_run(command, check):
+        calls.append(command)
+        Path(command[-1]).write_bytes(b"wav")
+
+    normalized = normalize_target_audio(
+        source,
+        output_dir=tmp_path / "normalized",
+        sample_rate=16_000,
+        run_command=fake_run,
+    )
+
+    assert normalized.name == "target_normalized.wav"
+    assert normalized.exists()
+    assert calls
+    assert calls[0][0] == "ffmpeg"
+    assert str(source) in calls[0]

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 import soundfile as sf
 import torch
@@ -59,9 +60,14 @@ def prepare_target_audio_dataset(config: TargetAudioDatasetConfig) -> TargetAudi
     audio_dir.mkdir(parents=True, exist_ok=True)
     target_manifest = target_dir / "manifest.jsonl"
     mixed_manifest = config.output_dir / "manifest.jsonl"
+    normalized_audio = normalize_target_audio(
+        config.target_audio,
+        output_dir=target_dir,
+        sample_rate=config.sample_rate,
+    )
 
     waveform = load_audio(
-        config.target_audio,
+        normalized_audio,
         sample_rate=config.sample_rate,
         max_seconds=None,
     )
@@ -86,6 +92,7 @@ def prepare_target_audio_dataset(config: TargetAudioDatasetConfig) -> TargetAudi
                     "audio": str(audio_path.relative_to(config.output_dir)),
                     "dataset": "target-jarvis",
                     "source_audio": str(config.target_audio),
+                    "normalized_audio": str(normalized_audio),
                     "window_index": window_index,
                     "augmentation": augmentation,
                 }
@@ -105,6 +112,41 @@ def prepare_target_audio_dataset(config: TargetAudioDatasetConfig) -> TargetAudi
         target_sample_count=len(target_records),
         mixed_sample_count=len(mixed_records),
     )
+
+
+def normalize_target_audio(
+    source: Path,
+    *,
+    output_dir: Path,
+    sample_rate: int,
+    run_command: Callable[..., object] = subprocess.run,
+) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target = output_dir / "target_normalized.wav"
+    if source.suffix.lower() == ".wav":
+        waveform = load_audio(source, sample_rate=sample_rate, max_seconds=None)
+        sf.write(target, waveform.numpy(), sample_rate, format="WAV")
+        return target
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(source),
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        str(target),
+    ]
+    try:
+        run_command(command, check=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "ffmpeg is required to normalize non-WAV target audio. "
+            "Install ffmpeg or pass a WAV file as TARGET_AUDIO."
+        ) from exc
+    return target
 
 
 def apply_augmentation(
