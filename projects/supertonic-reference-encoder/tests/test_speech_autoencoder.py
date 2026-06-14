@@ -129,3 +129,38 @@ def test_train_autoencoder_logs_validation_audio_metrics(tmp_path):
     assert metrics["validation_mel_loss"] >= 0.0
     logged = json.loads((tmp_path / "runs" / "metrics.jsonl").read_text().splitlines()[-1])
     assert "validation_mel_loss" in logged
+
+
+def test_train_autoencoder_normalizes_non_wav_validation_audio(tmp_path, monkeypatch):
+    audio = tmp_path / "train.wav"
+    validation_audio = tmp_path / "validation.mp3"
+    normalized_audio = tmp_path / "normalized.wav"
+    manifest = tmp_path / "manifest.jsonl"
+    _write_wav(audio)
+    validation_audio.write_bytes(b"fake mp3")
+    manifest.write_text(json.dumps({"audio": str(audio)}) + "\n", encoding="utf-8")
+
+    def fake_normalize(source, *, output_dir, sample_rate):
+        assert source == validation_audio
+        _write_wav(normalized_audio, frequency=440.0)
+        return normalized_audio
+
+    monkeypatch.setattr(
+        "supertonic_reference_encoder.speech_autoencoder.normalize_target_audio",
+        fake_normalize,
+    )
+
+    metrics = train_autoencoder(
+        AutoencoderTrainConfig(
+            manifest=manifest,
+            output_dir=tmp_path / "runs",
+            epochs=1,
+            batch_size=1,
+            sample_rate=16_000,
+            max_seconds=0.25,
+            validation_audio=validation_audio,
+            device="cpu",
+        )
+    )
+
+    assert metrics["validation_mel_loss"] >= 0.0

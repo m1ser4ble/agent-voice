@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from supertonic_reference_encoder.audio import LogMelExtractor, load_audio
 from supertonic_reference_encoder.model import ConvNeXtBlock1d, LATENT_DIM, MEL_BANDS, MelLatentEncoder
+from supertonic_reference_encoder.target_audio_dataset import normalize_target_audio
 from supertonic_reference_encoder.train import _resolve_device
 
 
@@ -308,6 +309,15 @@ def train_autoencoder(config: AutoencoderTrainConfig) -> dict[str, float]:
     loss_fn = MultiResolutionMelLoss(sample_rate=config.sample_rate).to(device)
     config.output_dir.mkdir(parents=True, exist_ok=True)
     _write_config(config)
+    validation_audio = (
+        normalize_target_audio(
+            config.validation_audio,
+            output_dir=config.output_dir / "validation",
+            sample_rate=config.sample_rate,
+        )
+        if config.validation_audio is not None
+        else None
+    )
 
     best_loss = float("inf")
     last_metrics: dict[str, float] = {}
@@ -326,11 +336,11 @@ def train_autoencoder(config: AutoencoderTrainConfig) -> dict[str, float]:
             totals["mel_loss"] += metrics["mel_loss"]
             steps += 1
         last_metrics = {key: value / max(steps, 1) for key, value in totals.items()}
-        if config.validation_audio is not None:
+        if validation_audio is not None:
             last_metrics.update(
                 evaluate_autoencoder_audio(
                     model,
-                    config.validation_audio,
+                    validation_audio,
                     device=device,
                     loss_fn=loss_fn,
                     sample_rate=config.sample_rate,
