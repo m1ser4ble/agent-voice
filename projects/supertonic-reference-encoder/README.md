@@ -204,6 +204,26 @@ During fine-tuning, `validation_mel_loss` and `validation_waveform_l1` are
 logged for the target audio on every epoch, so target quality can be tracked
 separately from training loss.
 
+For a speech-preserving Jarvis fine-tune, use the intelligible preset:
+
+```bash
+scripts/prepare_target_autoencoder_intelligible_ft.sh
+scripts/train_autoencoder_intelligible_ft_cuda.sh
+```
+
+This uses weaker target pressure than the default target fine-tune:
+
+- mixed manifest: `data/autoencoder-jarvis-intelligible/manifest.jsonl`
+- output dir: `runs/autoencoder-jarvis-intelligible-ft`
+- target repeat: `20`
+- augmentations: original, band-pass, compressed
+- learning rate: `0.00001`
+- epochs: `80`
+
+The intent is to keep the processed/intercom tone while reducing speech
+smearing. Use preview audio, not loss alone, to choose whether this checkpoint is
+better than the stronger target fine-tune.
+
 Outputs:
 
 - `config.json`: resolved training config
