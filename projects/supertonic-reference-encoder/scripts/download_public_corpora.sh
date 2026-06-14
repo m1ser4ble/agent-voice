@@ -20,6 +20,12 @@ mkdir -p "$DOWNLOAD_ROOT" "$ARCHIVE_DIR"
 download_file() {
   local url="$1"
   local output="$2"
+  local root_archive="$DOWNLOAD_ROOT/$(basename "$output")"
+  if [[ -f "$root_archive" && ! -f "$output" ]]; then
+    echo "using existing archive: $root_archive"
+    ln -s "$root_archive" "$output"
+    return
+  fi
   if [[ -f "$output" ]]; then
     echo "archive exists: $output"
     return
@@ -80,6 +86,9 @@ fi
 if [[ "$INCLUDE_ZEROTH" == "1" ]]; then
   archive="$ARCHIVE_DIR/zeroth_korean.tar.gz"
   marker="$DOWNLOAD_ROOT/zeroth_korean"
+  if [[ -e "$DOWNLOAD_ROOT/train_data_01" ]]; then
+    marker="$DOWNLOAD_ROOT/train_data_01"
+  fi
   if [[ -e "$marker" ]]; then
     echo "already extracted: $marker"
   else
@@ -133,6 +142,7 @@ if [[ "$INCLUDE_COMMON_VOICE_KO" == "1" ]]; then
 Common Voice Korean is not auto-downloaded by this script because Mozilla's
 Data Collective flow may require dataset selection, terms, and authenticated
 browser download. Download the Korean validated clips manually, extract them
-under /datasets/common_voice_ko, then run prepare_public_autoencoder_sample.sh.
+under /datasets/common_voice_ko or /datasets/cv-corpus-*/ko, then run
+prepare_public_autoencoder_sample.sh.
 EOF
 fi
