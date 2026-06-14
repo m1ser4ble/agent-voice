@@ -220,7 +220,7 @@ def _soft_clip(waveform: torch.Tensor, *, drive: float) -> torch.Tensor:
 
 def _read_manifest_with_absolute_audio(path: Path) -> list[dict[str, object]]:
     records: list[dict[str, object]] = []
-    root = path.parent
+    root = path.resolve().parent
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
@@ -231,7 +231,7 @@ def _read_manifest_with_absolute_audio(path: Path) -> list[dict[str, object]]:
             source_audio_path = Path(source_audio)
             if source_audio_path.exists():
                 audio_path = source_audio_path
-        record["audio"] = str(audio_path)
+        record["audio"] = str(audio_path.resolve())
         records.append(record)
     return records
 

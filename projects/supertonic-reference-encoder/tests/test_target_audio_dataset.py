@@ -73,6 +73,40 @@ def test_prepare_target_audio_dataset_builds_mixed_manifest_with_repeated_target
     assert [record["dataset"] for record in records[1:]] == ["target-jarvis"] * 3
 
 
+def test_prepare_target_audio_dataset_absolutizes_relative_public_manifest_audio(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)
+    public_audio = tmp_path / "data" / "public-autoencoder-sample" / "audio" / "public.wav"
+    target = tmp_path / "jarvis.wav"
+    public_audio.parent.mkdir(parents=True)
+    _write_wav(public_audio, seconds=1.0)
+    _write_wav(target, seconds=1.0)
+    public_manifest = tmp_path / "data" / "public-autoencoder-sample" / "manifest.jsonl"
+    public_manifest.write_text(
+        json.dumps({"audio": "audio/public.wav", "dataset": "public"}) + "\n",
+        encoding="utf-8",
+    )
+
+    result = prepare_target_audio_dataset(
+        TargetAudioDatasetConfig(
+            target_audio=target,
+            output_dir=Path("data/autoencoder-public-plus-target"),
+            public_manifest=Path("data/public-autoencoder-sample/manifest.jsonl"),
+            target_repeat=1,
+            sample_rate=16_000,
+            window_seconds=1.0,
+            hop_seconds=1.0,
+            augmentations=("original",),
+        )
+    )
+
+    records = _read_jsonl(result.mixed_manifest)
+    assert records[0]["audio"] == str(public_audio.resolve())
+    assert not str(records[0]["audio"]).startswith("data/autoencoder-public-plus-target/data/")
+
+
 def test_prepare_target_audio_dataset_falls_back_to_source_audio_for_broken_symlink(tmp_path):
     public_audio = tmp_path / "public.wav"
     target = tmp_path / "jarvis.wav"
