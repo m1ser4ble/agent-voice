@@ -174,6 +174,30 @@ LEARNING_RATE=0.00005 \
 scripts/train_autoencoder_cuda.sh
 ```
 
+Fine-tune toward a target processed voice, such as a Jarvis-like reference:
+
+```bash
+scripts/prepare_target_autoencoder_ft.sh
+scripts/train_autoencoder_target_ft_cuda.sh
+```
+
+Defaults:
+
+- target audio: `~/Downloads/Voicy_Jarvis Start Up.mp3`
+- base manifest: `data/public-autoencoder-sample/manifest.jsonl`
+- mixed manifest: `data/autoencoder-public-plus-target/manifest.jsonl`
+- resume checkpoint: `checkpoints/autoencoder-public.pt`
+- validation audio: the same target audio
+- learning rate: `0.00003`
+- batch size: `16`
+
+The target prep script splits the reference into 3-second windows and writes
+original, band-pass, compressed, distorted, and codec-like variants. The target
+windows are mixed into the public manifest with `TARGET_REPEAT=10` by default.
+During fine-tuning, `validation_mel_loss` and `validation_waveform_l1` are
+logged for the target audio on every epoch, so target quality can be tracked
+separately from training loss.
+
 Outputs:
 
 - `config.json`: resolved training config

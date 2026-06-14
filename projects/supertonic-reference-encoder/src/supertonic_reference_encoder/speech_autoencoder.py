@@ -231,6 +231,7 @@ class AutoencoderTrainConfig:
     device: str = "auto"
     save_optimizer: bool = False
     resume: Path | None = None
+    validation_audio: Path | None = None
 
 
 def train_autoencoder_one_step(
@@ -255,6 +256,34 @@ def train_autoencoder_one_step(
     return {
         "loss": float(mel_loss.detach().cpu()),
         "mel_loss": float(mel_loss.detach().cpu()),
+    }
+
+
+def evaluate_autoencoder_audio(
+    model: SpeechAutoencoder,
+    audio_path: Path,
+    *,
+    device: torch.device,
+    loss_fn: MultiResolutionMelLoss,
+    sample_rate: int,
+    max_seconds: float | None,
+) -> dict[str, float]:
+    was_training = model.training
+    model.eval()
+    waveform = load_audio(
+        audio_path,
+        sample_rate=sample_rate,
+        max_seconds=max_seconds,
+    ).unsqueeze(0).to(device)
+    with torch.no_grad():
+        output = model(waveform)
+        mel_loss = loss_fn(output.waveform, waveform)
+        waveform_l1 = F.l1_loss(output.waveform, waveform)
+    if was_training:
+        model.train()
+    return {
+        "validation_mel_loss": float(mel_loss.detach().cpu()),
+        "validation_waveform_l1": float(waveform_l1.detach().cpu()),
     }
 
 
@@ -297,6 +326,17 @@ def train_autoencoder(config: AutoencoderTrainConfig) -> dict[str, float]:
             totals["mel_loss"] += metrics["mel_loss"]
             steps += 1
         last_metrics = {key: value / max(steps, 1) for key, value in totals.items()}
+        if config.validation_audio is not None:
+            last_metrics.update(
+                evaluate_autoencoder_audio(
+                    model,
+                    config.validation_audio,
+                    device=device,
+                    loss_fn=loss_fn,
+                    sample_rate=config.sample_rate,
+                    max_seconds=config.max_seconds,
+                )
+            )
         last_metrics["epoch"] = float(epoch)
         _append_metrics(config.output_dir / "metrics.jsonl", last_metrics)
         _save_checkpoint(
@@ -334,6 +374,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--save-optimizer", action="store_true")
     parser.add_argument("--resume", type=Path)
+    parser.add_argument("--validation-audio", type=Path)
     return parser.parse_args(argv)
 
 
@@ -352,6 +393,7 @@ def main(argv: list[str] | None = None) -> int:
             device=args.device,
             save_optimizer=args.save_optimizer,
             resume=args.resume,
+            validation_audio=args.validation_audio,
         )
     )
     return 0
