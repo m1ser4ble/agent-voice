@@ -35,14 +35,35 @@ find_common_voice_ko_root() {
   local root="$1"
   local clips_dir
   local language_dir
+  local metadata_file
+  local audio_file
+  local audio_dir
 
   if [[ ! -d "$root" ]]; then
     return 0
   fi
 
+  while IFS= read -r metadata_file; do
+    language_dir="$(dirname "$metadata_file")"
+    if [[ -d "$language_dir/clips" ]]; then
+      printf '%s\n' "$language_dir"
+      return 0
+    fi
+    case "$language_dir" in
+      */ko|*common_voice*|*cv-corpus*)
+        printf '%s\n' "$language_dir"
+        return 0
+        ;;
+    esac
+  done < <(
+    find "$root" -maxdepth 10 -type f \
+      \( -name validated.tsv -o -name train.tsv -o -name dev.tsv -o -name test.tsv -o -name other.tsv -o -name invalidated.tsv -o -name clip_durations.tsv \) \
+      2>/dev/null | sort
+  )
+
   while IFS= read -r clips_dir; do
     language_dir="$(dirname "$clips_dir")"
-    if [[ -f "$language_dir/validated.tsv" || -f "$language_dir/train.tsv" || -f "$language_dir/test.tsv" || -f "$language_dir/clip_durations.tsv" ]]; then
+    if [[ -f "$language_dir/validated.tsv" || -f "$language_dir/train.tsv" || -f "$language_dir/dev.tsv" || -f "$language_dir/test.tsv" || -f "$language_dir/other.tsv" || -f "$language_dir/invalidated.tsv" || -f "$language_dir/clip_durations.tsv" ]]; then
       printf '%s\n' "$language_dir"
       return 0
     fi
@@ -52,7 +73,21 @@ find_common_voice_ko_root() {
         return 0
         ;;
     esac
-  done < <(find "$root" -maxdepth 6 -type d -name clips 2>/dev/null | sort)
+  done < <(find "$root" -maxdepth 10 -type d -name clips 2>/dev/null | sort)
+
+  while IFS= read -r audio_file; do
+    audio_dir="$(dirname "$audio_file")"
+    if [[ "$(basename "$audio_dir")" == "clips" ]]; then
+      printf '%s\n' "$(dirname "$audio_dir")"
+    else
+      printf '%s\n' "$audio_dir"
+    fi
+    return 0
+  done < <(
+    find "$root" -maxdepth 12 -type f \
+      \( -name 'common_voice_ko_*.mp3' -o -name 'common_voice_ko_*.wav' -o -name 'common_voice_ko_*.flac' -o -name 'common_voice_ko_*.ogg' \) \
+      2>/dev/null | sort
+  )
 }
 
 LIBRITTS_ROOT="$(resolve_first_dir "${LIBRITTS_ROOT:-}" "$DOWNLOAD_ROOT/LibriTTS/dev-clean")"

@@ -34,3 +34,38 @@ def test_prepare_public_sample_script_discovers_nested_common_voice(tmp_path):
         for line in (output_dir / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert [record["dataset"] for record in records] == ["common-voice-ko"]
+
+
+def test_prepare_public_sample_script_discovers_common_voice_by_audio_filename(tmp_path):
+    download_root = tmp_path / "datasets"
+    clip = (
+        download_root
+        / "downloads"
+        / "manual"
+        / "voice"
+        / "korean"
+        / "audio"
+        / "common_voice_ko_00000001.mp3"
+    )
+    clip.parent.mkdir(parents=True)
+    clip.write_bytes(b"mp3")
+
+    output_dir = tmp_path / "public-autoencoder-sample"
+    env = {
+        **os.environ,
+        "DOWNLOAD_ROOT": str(download_root),
+        "OUTPUT_DIR": str(output_dir),
+        "COPY_MODE": "copy",
+    }
+    subprocess.run(
+        ["bash", "scripts/prepare_public_autoencoder_sample.sh"],
+        cwd=Path(__file__).parents[1],
+        env=env,
+        check=True,
+    )
+
+    records = [
+        json.loads(line)
+        for line in (output_dir / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["dataset"] for record in records] == ["common-voice-ko"]
