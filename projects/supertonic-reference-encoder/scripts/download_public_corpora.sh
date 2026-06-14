@@ -64,6 +64,11 @@ fi
 if [[ "$INCLUDE_VCTK" == "1" ]]; then
   archive="$ARCHIVE_DIR/VCTK-Corpus-0.92.zip"
   marker="$DOWNLOAD_ROOT/VCTK-Corpus-0.92/wav48_silence_trimmed"
+  if [[ -e "$DOWNLOAD_ROOT/wav48_silence_trimmed" ]]; then
+    marker="$DOWNLOAD_ROOT/wav48_silence_trimmed"
+  elif [[ -e "$DOWNLOAD_ROOT/wav48_slience_trimmed" ]]; then
+    marker="$DOWNLOAD_ROOT/wav48_slience_trimmed"
+  fi
   if [[ -e "$marker" ]]; then
     echo "already extracted: $marker"
   else

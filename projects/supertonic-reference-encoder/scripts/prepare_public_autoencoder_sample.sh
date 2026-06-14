@@ -23,7 +23,7 @@ resolve_first_dir() {
 }
 
 LIBRITTS_ROOT="$(resolve_first_dir "${LIBRITTS_ROOT:-}" "$DOWNLOAD_ROOT/LibriTTS/dev-clean")"
-VCTK_ROOT="$(resolve_first_dir "${VCTK_ROOT:-}" "$DOWNLOAD_ROOT/VCTK-Corpus-0.92/wav48_silence_trimmed" "$DOWNLOAD_ROOT/VCTK-Corpus/wav48_silence_trimmed" "$DOWNLOAD_ROOT/VCTK-Corpus-0.92")"
+VCTK_ROOT="$(resolve_first_dir "${VCTK_ROOT:-}" "$DOWNLOAD_ROOT/VCTK-Corpus-0.92/wav48_silence_trimmed" "$DOWNLOAD_ROOT/VCTK-Corpus/wav48_silence_trimmed" "$DOWNLOAD_ROOT/wav48_silence_trimmed" "$DOWNLOAD_ROOT/wav48_slience_trimmed" "$DOWNLOAD_ROOT/VCTK-Corpus-0.92")"
 ZEROTH_ROOT="$(resolve_first_dir "${ZEROTH_ROOT:-}" "$DOWNLOAD_ROOT/zeroth_korean" "$DOWNLOAD_ROOT/zeroth_korean/train_data_01")"
 FLEURS_KO_ROOT="$(resolve_first_dir "${FLEURS_KO_ROOT:-}" "$DOWNLOAD_ROOT/fleurs/ko_kr" "$DOWNLOAD_ROOT/fleurs/ko_kr/train")"
 COMMON_VOICE_KO_ROOT="$(resolve_first_dir "${COMMON_VOICE_KO_ROOT:-}" "$DOWNLOAD_ROOT/common_voice_ko")"
