@@ -26,6 +26,17 @@ def test_intelligible_cuda_train_script_uses_conservative_defaults():
 
     assert 'MANIFEST="${MANIFEST:-data/autoencoder-jarvis-intelligible/manifest.jsonl}"' in text
     assert 'OUTPUT_DIR="${OUTPUT_DIR:-runs/autoencoder-jarvis-intelligible-ft}"' in text
+    assert 'RESUME="${RESUME:-runs/autoencoder-public-cuda/best.pt}"' in text
     assert 'EPOCHS="${EPOCHS:-80}"' in text
     assert 'LEARNING_RATE="${LEARNING_RATE:-0.00001}"' in text
     assert "scripts/prepare_target_autoencoder_intelligible_ft.sh" in text
+
+
+def test_target_cuda_train_script_uses_paper_public_run_checkpoint():
+    script = PROJECT_ROOT / "scripts" / "train_autoencoder_target_ft_cuda.sh"
+
+    text = script.read_text(encoding="utf-8")
+
+    assert 'RESUME="${RESUME:-runs/autoencoder-public-cuda/best.pt}"' in text
+    assert "Run scripts/train_autoencoder_cuda.sh first" in text
+    assert "checkpoints/autoencoder-public.pt" not in text

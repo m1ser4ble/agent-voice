@@ -120,6 +120,8 @@ class CausalConvNeXtBlock1d(nn.Module):
 class LatentDecoder(nn.Module):
     """Causal latent decoder following the paper's speech-autoencoder decoder."""
 
+    DILATIONS = (1, 2, 4, 1, 2, 4, 1, 1, 1, 1)
+
     def __init__(
         self,
         *,
@@ -129,7 +131,7 @@ class LatentDecoder(nn.Module):
         super().__init__()
         self.frame_size = frame_size
         self.input = nn.Sequential(
-            nn.Conv1d(LATENT_DIM, hidden_dim, kernel_size=7, padding=3),
+            nn.Conv1d(LATENT_DIM, hidden_dim, kernel_size=7),
             nn.BatchNorm1d(hidden_dim),
             nn.GELU(),
         )
@@ -139,20 +141,22 @@ class LatentDecoder(nn.Module):
                     dim=hidden_dim,
                     intermediate_dim=2048,
                     kernel_size=7,
-                    dilation=2 ** (index % 4),
+                    dilation=dilation,
                 )
-                for index in range(10)
+                for dilation in self.DILATIONS
             ]
         )
-        self.output = nn.Sequential(
-            nn.Conv1d(hidden_dim, hidden_dim, kernel_size=1),
-            nn.PReLU(),
-            nn.Conv1d(hidden_dim, frame_size, kernel_size=1),
-        )
+        self.post_norm = nn.BatchNorm1d(hidden_dim)
+        self.projection = nn.Conv1d(hidden_dim, 2048, kernel_size=3)
+        self.frame_projection = nn.Linear(2048, frame_size)
 
     def forward(self, latent: torch.Tensor, *, target_samples: int | None = None) -> torch.Tensor:
-        frames = self.output(self.blocks(self.input(latent)))
-        waveform = frames.transpose(1, 2).reshape(latent.shape[0], -1)
+        x = self.blocks(self.input(F.pad(latent, (6, 0))))
+        x = self.post_norm(x)
+        x = F.pad(x, (2, 0))
+        x = self.projection(x)
+        frames = self.frame_projection(x.transpose(1, 2))
+        waveform = frames.reshape(latent.shape[0], -1)
         if target_samples is not None:
             if waveform.shape[1] < target_samples:
                 waveform = F.pad(waveform, (0, target_samples - waveform.shape[1]))
@@ -220,6 +224,214 @@ class MultiResolutionMelLoss(nn.Module):
 
 
 @dataclass(frozen=True)
+class DiscriminatorOutput:
+    name: str
+    score: torch.Tensor
+    features: list[torch.Tensor]
+
+
+class MultiPeriodDiscriminator(nn.Module):
+    PERIODS = (2, 3, 5, 7, 11)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.discriminators = nn.ModuleList(
+            [_PeriodDiscriminator(period=period) for period in self.PERIODS]
+        )
+
+    def forward(self, waveform: torch.Tensor) -> list[DiscriminatorOutput]:
+        return [discriminator(waveform) for discriminator in self.discriminators]
+
+
+class _PeriodDiscriminator(nn.Module):
+    def __init__(self, *, period: int) -> None:
+        super().__init__()
+        self.period = period
+        channels = (1, 16, 64, 256, 512, 512, 1)
+        layers = []
+        for index, (in_channels, out_channels) in enumerate(zip(channels, channels[1:])):
+            is_last = index == len(channels) - 2
+            kernel_size = (3, 1) if is_last else (5, 1)
+            stride = (1, 1) if is_last else (3, 1)
+            padding = (1, 0) if is_last else (2, 0)
+            layers.append(
+                nn.utils.weight_norm(
+                    nn.Conv2d(
+                        in_channels,
+                        out_channels,
+                        kernel_size=kernel_size,
+                        stride=stride,
+                        padding=padding,
+                    )
+                )
+            )
+        self.layers = nn.ModuleList(layers)
+
+    def forward(self, waveform: torch.Tensor) -> DiscriminatorOutput:
+        if waveform.ndim != 2:
+            raise ValueError(f"waveform must be [batch, samples], got {tuple(waveform.shape)}")
+        pad = (-waveform.shape[1]) % self.period
+        if pad:
+            waveform = F.pad(waveform, (0, pad), mode="reflect")
+        x = waveform.view(waveform.shape[0], 1, waveform.shape[1] // self.period, self.period)
+        features = []
+        for index, layer in enumerate(self.layers):
+            x = layer(x)
+            if index < len(self.layers) - 1:
+                x = F.leaky_relu(x, 0.1)
+            features.append(x)
+        return DiscriminatorOutput(name=f"mpd_{self.period}", score=x, features=features)
+
+
+class MultiResolutionDiscriminator(nn.Module):
+    FFT_SIZES = (512, 1024, 2048)
+
+    def __init__(self, *, sample_rate: int = 44_100) -> None:
+        super().__init__()
+        self.sample_rate = sample_rate
+        self.discriminators = nn.ModuleList(
+            [_ResolutionDiscriminator(fft_size=fft_size) for fft_size in self.FFT_SIZES]
+        )
+
+    def forward(self, waveform: torch.Tensor) -> list[DiscriminatorOutput]:
+        return [discriminator(waveform) for discriminator in self.discriminators]
+
+
+class _ResolutionDiscriminator(nn.Module):
+    def __init__(self, *, fft_size: int) -> None:
+        super().__init__()
+        self.fft_size = fft_size
+        channels = (1, 16, 16, 16, 16, 16, 1)
+        strides = ((1, 1), (2, 1), (2, 1), (2, 1), (1, 1), (1, 1))
+        kernels = ((5, 5), (5, 5), (5, 5), (5, 5), (5, 5), (3, 3))
+        self.layers = nn.ModuleList(
+            [
+                nn.utils.weight_norm(
+                    nn.Conv2d(
+                        in_channels,
+                        out_channels,
+                        kernel_size=kernel_size,
+                        stride=stride,
+                        padding=(kernel_size[0] // 2, kernel_size[1] // 2),
+                    )
+                )
+                for in_channels, out_channels, kernel_size, stride in zip(
+                    channels,
+                    channels[1:],
+                    kernels,
+                    strides,
+                )
+            ]
+        )
+
+    def forward(self, waveform: torch.Tensor) -> DiscriminatorOutput:
+        spectrogram = torch.stft(
+            waveform,
+            n_fft=self.fft_size,
+            hop_length=self.fft_size // 4,
+            win_length=self.fft_size,
+            window=torch.hann_window(self.fft_size, device=waveform.device),
+            return_complex=True,
+        )
+        x = torch.log1p(torch.abs(spectrogram)).unsqueeze(1)
+        features = []
+        for index, layer in enumerate(self.layers):
+            x = layer(x)
+            if index < len(self.layers) - 1:
+                x = F.leaky_relu(x, 0.1)
+            features.append(x)
+        return DiscriminatorOutput(name=f"mrd_{self.fft_size}", score=x, features=features)
+
+
+class PaperAutoencoderAdversarialLoss(nn.Module):
+    """GAN objectives described for the SupertonicTTS speech autoencoder."""
+
+    def __init__(
+        self,
+        *,
+        sample_rate: int = 44_100,
+        feature_matching_weight: float = 2.0,
+        adversarial_weight: float = 1.0,
+    ) -> None:
+        super().__init__()
+        self.mpd = MultiPeriodDiscriminator()
+        self.mrd = MultiResolutionDiscriminator(sample_rate=sample_rate)
+        self.feature_matching_weight = feature_matching_weight
+        self.adversarial_weight = adversarial_weight
+
+    def forward(self, waveform: torch.Tensor) -> list[DiscriminatorOutput]:
+        return [*self.mpd(waveform), *self.mrd(waveform)]
+
+    def train_step(
+        self,
+        *,
+        real: torch.Tensor,
+        generated: torch.Tensor,
+        generator_optimizer: torch.optim.Optimizer,
+        discriminator_optimizer: torch.optim.Optimizer,
+        reconstruction_loss_fn: MultiResolutionMelLoss,
+    ) -> dict[str, float]:
+        discriminator_optimizer.zero_grad(set_to_none=True)
+        real_outputs = self(real)
+        fake_outputs = self(generated.detach())
+        discriminator_loss = _discriminator_loss(real_outputs, fake_outputs)
+        discriminator_loss.backward()
+        discriminator_optimizer.step()
+
+        generator_optimizer.zero_grad(set_to_none=True)
+        real_outputs_for_generator = self(real)
+        fake_outputs_for_generator = self(generated)
+        mel_loss = reconstruction_loss_fn(generated, real)
+        generator_adversarial_loss = _generator_adversarial_loss(fake_outputs_for_generator)
+        feature_matching_loss = _feature_matching_loss(
+            real_outputs_for_generator,
+            fake_outputs_for_generator,
+        )
+        loss = (
+            mel_loss
+            + self.adversarial_weight * generator_adversarial_loss
+            + self.feature_matching_weight * feature_matching_loss
+        )
+        loss.backward()
+        generator_optimizer.step()
+        return {
+            "loss": float(loss.detach().cpu()),
+            "mel_loss": float(mel_loss.detach().cpu()),
+            "generator_adversarial_loss": float(generator_adversarial_loss.detach().cpu()),
+            "feature_matching_loss": float(feature_matching_loss.detach().cpu()),
+            "discriminator_loss": float(discriminator_loss.detach().cpu()),
+        }
+
+
+def _discriminator_loss(
+    real_outputs: list[DiscriminatorOutput],
+    fake_outputs: list[DiscriminatorOutput],
+) -> torch.Tensor:
+    losses = []
+    for real, fake in zip(real_outputs, fake_outputs):
+        losses.append(F.mse_loss(real.score, torch.ones_like(real.score)))
+        losses.append(F.mse_loss(fake.score, torch.zeros_like(fake.score)))
+    return torch.stack(losses).mean()
+
+
+def _generator_adversarial_loss(outputs: list[DiscriminatorOutput]) -> torch.Tensor:
+    return torch.stack(
+        [F.mse_loss(output.score, torch.ones_like(output.score)) for output in outputs]
+    ).mean()
+
+
+def _feature_matching_loss(
+    real_outputs: list[DiscriminatorOutput],
+    fake_outputs: list[DiscriminatorOutput],
+) -> torch.Tensor:
+    losses = []
+    for real, fake in zip(real_outputs, fake_outputs):
+        for real_feature, fake_feature in zip(real.features, fake.features):
+            losses.append(F.l1_loss(fake_feature, real_feature.detach()))
+    return torch.stack(losses).mean()
+
+
+@dataclass(frozen=True)
 class AutoencoderTrainConfig:
     manifest: Path
     output_dir: Path
@@ -242,22 +454,31 @@ def train_autoencoder_one_step(
     model: SpeechAutoencoder | None = None,
     optimizer: torch.optim.Optimizer | None = None,
     loss_fn: MultiResolutionMelLoss | None = None,
+    adversarial_loss: PaperAutoencoderAdversarialLoss | None = None,
+    discriminator_optimizer: torch.optim.Optimizer | None = None,
 ) -> dict[str, float]:
     model = (model or SpeechAutoencoder(sample_rate=16_000)).to(device)
     optimizer = optimizer or torch.optim.AdamW(model.parameters(), lr=1e-4)
     loss_fn = (loss_fn or MultiResolutionMelLoss(sample_rate=16_000)).to(device)
+    adversarial_loss = (adversarial_loss or PaperAutoencoderAdversarialLoss(sample_rate=16_000)).to(
+        device
+    )
+    discriminator_optimizer = discriminator_optimizer or torch.optim.AdamW(
+        adversarial_loss.parameters(),
+        lr=1e-4,
+    )
     model.train()
+    adversarial_loss.train()
 
     waveform = batch.waveform.to(device)
-    optimizer.zero_grad(set_to_none=True)
     output = model(waveform)
-    mel_loss = loss_fn(output.waveform, waveform)
-    mel_loss.backward()
-    optimizer.step()
-    return {
-        "loss": float(mel_loss.detach().cpu()),
-        "mel_loss": float(mel_loss.detach().cpu()),
-    }
+    return adversarial_loss.train_step(
+        real=waveform,
+        generated=output.waveform,
+        generator_optimizer=optimizer,
+        discriminator_optimizer=discriminator_optimizer,
+        reconstruction_loss_fn=loss_fn,
+    )
 
 
 def evaluate_autoencoder_audio(
@@ -307,6 +528,11 @@ def train_autoencoder(config: AutoencoderTrainConfig) -> dict[str, float]:
         load_autoencoder_checkpoint(model, config.resume)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
     loss_fn = MultiResolutionMelLoss(sample_rate=config.sample_rate).to(device)
+    adversarial_loss = PaperAutoencoderAdversarialLoss(sample_rate=config.sample_rate).to(device)
+    discriminator_optimizer = torch.optim.AdamW(
+        adversarial_loss.parameters(),
+        lr=config.learning_rate,
+    )
     config.output_dir.mkdir(parents=True, exist_ok=True)
     _write_config(config)
     validation_audio = (
@@ -322,7 +548,13 @@ def train_autoencoder(config: AutoencoderTrainConfig) -> dict[str, float]:
     best_loss = float("inf")
     last_metrics: dict[str, float] = {}
     for epoch in range(1, config.epochs + 1):
-        totals = {"loss": 0.0, "mel_loss": 0.0}
+        totals = {
+            "loss": 0.0,
+            "mel_loss": 0.0,
+            "generator_adversarial_loss": 0.0,
+            "feature_matching_loss": 0.0,
+            "discriminator_loss": 0.0,
+        }
         steps = 0
         for batch in loader:
             metrics = train_autoencoder_one_step(
@@ -331,9 +563,11 @@ def train_autoencoder(config: AutoencoderTrainConfig) -> dict[str, float]:
                 model=model,
                 optimizer=optimizer,
                 loss_fn=loss_fn,
+                adversarial_loss=adversarial_loss,
+                discriminator_optimizer=discriminator_optimizer,
             )
-            totals["loss"] += metrics["loss"]
-            totals["mel_loss"] += metrics["mel_loss"]
+            for key in totals:
+                totals[key] += metrics[key]
             steps += 1
         last_metrics = {key: value / max(steps, 1) for key, value in totals.items()}
         if validation_audio is not None:
@@ -353,6 +587,8 @@ def train_autoencoder(config: AutoencoderTrainConfig) -> dict[str, float]:
             config.output_dir / "latest.pt",
             model=model,
             optimizer=optimizer,
+            discriminator=adversarial_loss,
+            discriminator_optimizer=discriminator_optimizer,
             config=config,
             metrics=last_metrics,
             save_optimizer=config.save_optimizer,
@@ -363,6 +599,8 @@ def train_autoencoder(config: AutoencoderTrainConfig) -> dict[str, float]:
                 config.output_dir / "best.pt",
                 model=model,
                 optimizer=optimizer,
+                discriminator=adversarial_loss,
+                discriminator_optimizer=discriminator_optimizer,
                 config=config,
                 metrics=last_metrics,
                 save_optimizer=config.save_optimizer,
@@ -456,6 +694,8 @@ def _save_checkpoint(
     *,
     model: SpeechAutoencoder,
     optimizer: torch.optim.Optimizer,
+    discriminator: PaperAutoencoderAdversarialLoss | None = None,
+    discriminator_optimizer: torch.optim.Optimizer | None = None,
     config: AutoencoderTrainConfig,
     metrics: dict[str, float],
     save_optimizer: bool,
@@ -468,8 +708,12 @@ def _save_checkpoint(
         },
         "metrics": metrics,
     }
+    if discriminator is not None:
+        payload["discriminator"] = discriminator.state_dict()
     if save_optimizer:
         payload["optimizer"] = optimizer.state_dict()
+        if discriminator_optimizer is not None:
+            payload["discriminator_optimizer"] = discriminator_optimizer.state_dict()
     torch.save(payload, path)
 
 

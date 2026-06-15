@@ -10,6 +10,9 @@ from supertonic_reference_encoder.speech_autoencoder import (
     evaluate_autoencoder_audio,
     load_autoencoder_checkpoint,
     MultiResolutionMelLoss,
+    MultiPeriodDiscriminator,
+    MultiResolutionDiscriminator,
+    PaperAutoencoderAdversarialLoss,
     SpeechAutoencoder,
     WaveformDataset,
     collate_waveforms,
@@ -50,6 +53,30 @@ def test_speech_autoencoder_reconstructs_waveform_from_24_dimensional_latent(tmp
     assert output.waveform.shape == waveform.shape
 
 
+def test_latent_decoder_uses_paper_dilation_pattern_and_projection_head():
+    model = SpeechAutoencoder(sample_rate=16_000)
+
+    assert model.decoder.input[0].padding == (0,)
+    assert [block.depthwise.dilation[0] for block in model.decoder.blocks] == [
+        1,
+        2,
+        4,
+        1,
+        2,
+        4,
+        1,
+        1,
+        1,
+        1,
+    ]
+    assert model.decoder.post_norm.num_features == 512
+    assert model.decoder.projection.kernel_size == (3,)
+    assert model.decoder.projection.in_channels == 512
+    assert model.decoder.projection.out_channels == 2048
+    assert model.decoder.frame_projection.in_features == 2048
+    assert model.decoder.frame_projection.out_features == 512
+
+
 def test_multiresolution_mel_loss_is_zero_for_identical_audio():
     loss_fn = MultiResolutionMelLoss(sample_rate=16_000)
     waveform = torch.randn(2, 4_096)
@@ -57,6 +84,53 @@ def test_multiresolution_mel_loss_is_zero_for_identical_audio():
     loss = loss_fn(waveform, waveform)
 
     assert torch.isclose(loss, torch.tensor(0.0), atol=1e-6)
+
+
+def test_paper_discriminators_return_scores_and_layer_features():
+    waveform = torch.randn(2, 4096)
+    mpd = MultiPeriodDiscriminator()
+    mrd = MultiResolutionDiscriminator(sample_rate=16_000)
+
+    mpd_outputs = mpd(waveform)
+    mrd_outputs = mrd(waveform)
+
+    assert [output.name for output in mpd_outputs] == [
+        "mpd_2",
+        "mpd_3",
+        "mpd_5",
+        "mpd_7",
+        "mpd_11",
+    ]
+    assert [output.name for output in mrd_outputs] == [
+        "mrd_512",
+        "mrd_1024",
+        "mrd_2048",
+    ]
+    assert all(output.score.ndim == 4 for output in mpd_outputs + mrd_outputs)
+    assert all(len(output.features) == 6 for output in mpd_outputs + mrd_outputs)
+
+
+def test_paper_adversarial_loss_updates_generator_and_discriminator():
+    waveform = torch.randn(2, 4096)
+    model = SpeechAutoencoder(sample_rate=16_000)
+    discriminators = PaperAutoencoderAdversarialLoss(sample_rate=16_000)
+    generator_optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    discriminator_optimizer = torch.optim.AdamW(discriminators.parameters(), lr=1e-4)
+
+    output = model(waveform)
+    metrics = discriminators.train_step(
+        real=waveform,
+        generated=output.waveform,
+        generator_optimizer=generator_optimizer,
+        discriminator_optimizer=discriminator_optimizer,
+        reconstruction_loss_fn=MultiResolutionMelLoss(sample_rate=16_000),
+    )
+
+    assert metrics["loss"] > 0.0
+    assert metrics["mel_loss"] > 0.0
+    assert metrics["generator_adversarial_loss"] > 0.0
+    assert metrics["feature_matching_loss"] >= 0.0
+    assert metrics["discriminator_loss"] > 0.0
 
 
 def test_train_autoencoder_one_step_runs_on_waveform_batch(tmp_path):

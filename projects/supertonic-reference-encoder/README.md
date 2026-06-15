@@ -96,14 +96,27 @@ uv run supertonic-autoencoder-train \
   --device auto
 ```
 
-The reconstruction loss follows the paper's multi-resolution mel setup:
+The autoencoder follows the paper's GAN training setup:
 
-- FFT 1024, 64 mel bands, hop 256
-- FFT 2048, 128 mel bands, hop 512
-- FFT 4096, 128 mel bands, hop 1024
+- reconstruction loss: multi-resolution mel spectrograms
+  - FFT 1024, 64 mel bands, hop 256
+  - FFT 2048, 128 mel bands, hop 512
+  - FFT 4096, 128 mel bands, hop 1024
+- discriminators:
+  - lightweight MPD periods 2, 3, 5, 7, 11
+  - MRD FFT sizes 512, 1024, 2048
+- generator objective:
+  - reconstruction loss
+  - adversarial loss
+  - feature matching loss
 
 This stage does not produce `style_ttl/style_dp` yet. It learns the 24-d speech
 latent space that the reference encoders should consume.
+
+Older checkpoints trained before the GAN/discriminator implementation are not
+architecture-compatible with this path. Retrain the public autoencoder first
+with `scripts/train_autoencoder_cuda.sh`; target fine-tune scripts use
+`runs/autoencoder-public-cuda/best.pt` by default.
 
 Recommended public sample-corpus mix for this stage:
 
@@ -192,7 +205,7 @@ Defaults:
 - target audio: `~/Downloads/Voicy_Jarvis Start Up.mp3`
 - base manifest: `data/public-autoencoder-sample/manifest.jsonl`
 - mixed manifest: `data/autoencoder-public-plus-target/manifest.jsonl`
-- resume checkpoint: `checkpoints/autoencoder-public.pt`
+- resume checkpoint: `runs/autoencoder-public-cuda/best.pt`
 - validation audio: the same target audio
 - learning rate: `0.00003`
 - batch size: `16`

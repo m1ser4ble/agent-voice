@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 MANIFEST="${MANIFEST:-data/autoencoder-jarvis-intelligible/manifest.jsonl}"
 OUTPUT_DIR="${OUTPUT_DIR:-runs/autoencoder-jarvis-intelligible-ft}"
-RESUME="${RESUME:-checkpoints/autoencoder-public.pt}"
+RESUME="${RESUME:-runs/autoencoder-public-cuda/best.pt}"
 VALIDATION_AUDIO="${VALIDATION_AUDIO:-$HOME/Downloads/Voicy_Jarvis Start Up.mp3}"
 EPOCHS="${EPOCHS:-80}"
 BATCH_SIZE="${BATCH_SIZE:-16}"
@@ -36,7 +36,7 @@ fi
 
 if [[ ! -f "$RESUME" ]]; then
   echo "resume checkpoint not found: $RESUME" >&2
-  echo "Set RESUME=/path/to/best.pt or copy checkpoints/autoencoder-public.pt into place." >&2
+  echo "Run scripts/train_autoencoder_cuda.sh first, or set RESUME=/path/to/paper-autoencoder-best.pt." >&2
   exit 1
 fi
 
