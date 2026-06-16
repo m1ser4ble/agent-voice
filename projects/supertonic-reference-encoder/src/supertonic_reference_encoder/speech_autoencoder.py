@@ -392,10 +392,14 @@ class PaperAutoencoderAdversarialLoss(nn.Module):
         gradient_scaler: torch.amp.GradScaler | None = None,
     ) -> dict[str, float]:
         real_loss, generated_loss = _loss_precision_waveforms(real, generated)
+        real_discriminator = _sanitize_waveform_for_discriminator(real_loss)
+        generated_discriminator = _sanitize_waveform_for_discriminator(generated_loss)
         discriminator_optimizer.zero_grad(set_to_none=True)
-        real_outputs = self(real_loss)
-        fake_outputs = self(generated_loss.detach())
+        real_outputs = self(real_discriminator)
+        fake_outputs = self(generated_discriminator.detach())
         discriminator_loss = _discriminator_loss(real_outputs, fake_outputs)
+        _assert_finite_discriminator_outputs("discriminator_real", real_outputs)
+        _assert_finite_discriminator_outputs("discriminator_fake", fake_outputs)
         _assert_finite_losses({"discriminator_loss": discriminator_loss})
         _backward_and_step(
             discriminator_loss,
@@ -404,8 +408,8 @@ class PaperAutoencoderAdversarialLoss(nn.Module):
         )
 
         generator_optimizer.zero_grad(set_to_none=True)
-        real_outputs_for_generator = self(real_loss)
-        fake_outputs_for_generator = self(generated_loss)
+        real_outputs_for_generator = self(real_discriminator)
+        fake_outputs_for_generator = self(generated_discriminator)
         mel_loss = reconstruction_loss_fn(generated_loss, real_loss)
         generator_adversarial_loss = _generator_adversarial_loss(fake_outputs_for_generator)
         feature_matching_loss = _feature_matching_loss(
@@ -481,6 +485,10 @@ def _loss_precision_waveforms(
     return real.float(), generated.float()
 
 
+def _sanitize_waveform_for_discriminator(waveform: torch.Tensor) -> torch.Tensor:
+    return torch.nan_to_num(waveform, nan=0.0, posinf=1.0, neginf=-1.0).clamp(-1.0, 1.0)
+
+
 def _assert_finite_losses(losses: dict[str, torch.Tensor]) -> None:
     non_finite = [
         name
@@ -489,6 +497,21 @@ def _assert_finite_losses(losses: dict[str, torch.Tensor]) -> None:
     ]
     if non_finite:
         raise RuntimeError(f"non-finite autoencoder loss: {', '.join(non_finite)}")
+
+
+def _assert_finite_discriminator_outputs(
+    prefix: str,
+    outputs: list[DiscriminatorOutput],
+) -> None:
+    non_finite = []
+    for output in outputs:
+        if not torch.isfinite(output.score.detach()).all().item():
+            non_finite.append(f"{prefix}.{output.name}.score")
+        for index, feature in enumerate(output.features):
+            if not torch.isfinite(feature.detach()).all().item():
+                non_finite.append(f"{prefix}.{output.name}.features[{index}]")
+    if non_finite:
+        raise RuntimeError(f"non-finite discriminator output: {', '.join(non_finite)}")
 
 
 @dataclass(frozen=True)

@@ -22,6 +22,7 @@ from supertonic_reference_encoder.speech_autoencoder import (
     _assert_finite_losses,
     _linear_log_spectrogram,
     _loss_precision_waveforms,
+    _sanitize_waveform_for_discriminator,
     _resolve_mixed_precision,
 )
 
@@ -265,6 +266,21 @@ def test_non_finite_losses_fail_with_component_name():
                 "mel_loss": torch.tensor(float("nan")),
             }
         )
+
+
+def test_discriminator_waveforms_are_finite_and_bounded():
+    waveform = torch.tensor(
+        [[float("nan"), float("inf"), float("-inf"), -3.0, 0.5, 4.0]],
+        requires_grad=True,
+    )
+
+    sanitized = _sanitize_waveform_for_discriminator(waveform)
+    sanitized.sum().backward()
+
+    assert torch.isfinite(sanitized).all()
+    assert sanitized.min() >= -1.0
+    assert sanitized.max() <= 1.0
+    assert waveform.grad is not None
 
 
 def test_load_autoencoder_checkpoint_restores_model_weights(tmp_path):
