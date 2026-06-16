@@ -13,6 +13,7 @@ NUM_WORKERS="${NUM_WORKERS:-4}"
 MAX_SECONDS="${MAX_SECONDS:-3.0}"
 LEARNING_RATE="${LEARNING_RATE:-0.00001}"
 AUTO_PREPARE_MANIFEST="${AUTO_PREPARE_MANIFEST:-1}"
+LOG_EVERY_STEPS="${LOG_EVERY_STEPS:-10}"
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
   echo "ffmpeg not found. Install ffmpeg before training with MP3 validation audio." >&2
@@ -58,4 +59,5 @@ uv run supertonic-autoencoder-train \
   --num-workers "$NUM_WORKERS" \
   --device cuda \
   --max-seconds "$MAX_SECONDS" \
-  --learning-rate "$LEARNING_RATE"
+  --learning-rate "$LEARNING_RATE" \
+  --log-every-steps "$LOG_EVERY_STEPS"

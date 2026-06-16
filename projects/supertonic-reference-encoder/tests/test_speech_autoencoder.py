@@ -314,6 +314,63 @@ def test_train_autoencoder_logs_validation_audio_metrics(tmp_path):
     assert "validation_mel_loss" in logged
 
 
+def test_train_autoencoder_logs_step_progress(tmp_path, monkeypatch, capsys):
+    audio_a = tmp_path / "train-a.wav"
+    audio_b = tmp_path / "train-b.wav"
+    manifest = tmp_path / "manifest.jsonl"
+    _write_wav(audio_a)
+    _write_wav(audio_b, frequency=440.0)
+    manifest.write_text(
+        "\n".join(
+            [
+                json.dumps({"audio": str(audio_a)}),
+                json.dumps({"audio": str(audio_b)}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def fake_train_step(*args, **kwargs):
+        return {
+            "loss": 1.0,
+            "mel_loss": 0.5,
+            "generator_adversarial_loss": 0.25,
+            "feature_matching_loss": 0.125,
+            "discriminator_loss": 0.75,
+        }
+
+    monkeypatch.setattr(
+        "supertonic_reference_encoder.speech_autoencoder.train_autoencoder_one_step",
+        fake_train_step,
+    )
+
+    train_autoencoder(
+        AutoencoderTrainConfig(
+            manifest=manifest,
+            output_dir=tmp_path / "runs",
+            epochs=1,
+            batch_size=1,
+            sample_rate=16_000,
+            max_seconds=0.25,
+            device="cpu",
+            log_every_steps=1,
+        )
+    )
+
+    lines = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if '"event": "autoencoder_step"' in line
+    ]
+    assert len(lines) == 2
+    assert lines[0]["epoch"] == 1
+    assert lines[0]["step"] == 1
+    assert lines[0]["total_steps"] == 2
+    assert lines[0]["loss"] == 1.0
+    assert "step_seconds" in lines[0]
+
+
 def test_train_autoencoder_normalizes_non_wav_validation_audio(tmp_path, monkeypatch):
     audio = tmp_path / "train.wav"
     validation_audio = tmp_path / "validation.mp3"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -479,6 +480,7 @@ class AutoencoderTrainConfig:
     resume: Path | None = None
     validation_audio: Path | None = None
     mixed_precision: bool = True
+    log_every_steps: int = 0
 
 
 def train_autoencoder_one_step(
@@ -609,7 +611,9 @@ def train_autoencoder(config: AutoencoderTrainConfig) -> dict[str, float]:
             "discriminator_loss": 0.0,
         }
         steps = 0
+        total_steps = len(loader)
         for batch in loader:
+            step_started_at = time.perf_counter()
             metrics = train_autoencoder_one_step(
                 batch,
                 device=device,
@@ -621,9 +625,28 @@ def train_autoencoder(config: AutoencoderTrainConfig) -> dict[str, float]:
                 mixed_precision_enabled=mixed_precision_enabled,
                 gradient_scaler=gradient_scaler,
             )
+            _sync_if_cuda(device)
+            step_seconds = time.perf_counter() - step_started_at
             for key in totals:
                 totals[key] += metrics[key]
             steps += 1
+            if _should_log_step(steps, config.log_every_steps):
+                print(
+                    json.dumps(
+                        _step_log_payload(
+                            epoch=epoch,
+                            step=steps,
+                            total_steps=total_steps,
+                            step_seconds=step_seconds,
+                            batch=batch,
+                            metrics=metrics,
+                            device=device,
+                            mixed_precision_enabled=mixed_precision_enabled,
+                        ),
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
         last_metrics = {key: value / max(steps, 1) for key, value in totals.items()}
         if validation_audio is not None:
             last_metrics.update(
@@ -678,6 +701,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--save-optimizer", action="store_true")
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--validation-audio", type=Path)
+    parser.add_argument("--log-every-steps", type=int, default=0)
     parser.add_argument(
         "--mixed-precision",
         action=argparse.BooleanOptionalAction,
@@ -704,6 +728,7 @@ def main(argv: list[str] | None = None) -> int:
             resume=args.resume,
             validation_audio=args.validation_audio,
             mixed_precision=args.mixed_precision,
+            log_every_steps=args.log_every_steps,
         )
     )
     return 0
@@ -768,6 +793,45 @@ def _backward_and_step(
         return
     gradient_scaler.scale(loss).backward()
     gradient_scaler.step(optimizer)
+
+
+def _should_log_step(step: int, log_every_steps: int) -> bool:
+    return log_every_steps > 0 and step % log_every_steps == 0
+
+
+def _step_log_payload(
+    *,
+    epoch: int,
+    step: int,
+    total_steps: int,
+    step_seconds: float,
+    batch: WaveformBatch,
+    metrics: dict[str, float],
+    device: torch.device,
+    mixed_precision_enabled: bool,
+) -> dict[str, float | int | str | bool]:
+    payload: dict[str, float | int | str | bool] = {
+        "event": "autoencoder_step",
+        "epoch": epoch,
+        "step": step,
+        "total_steps": total_steps,
+        "step_seconds": step_seconds,
+        "batch_size": int(batch.waveform.shape[0]),
+        "batch_max_samples": int(batch.waveform.shape[1]),
+        "device": device.type,
+        "mixed_precision": mixed_precision_enabled,
+    }
+    payload.update({key: float(value) for key, value in metrics.items()})
+    if device.type == "cuda":
+        payload["cuda_allocated_gb"] = torch.cuda.memory_allocated(device) / 1024**3
+        payload["cuda_reserved_gb"] = torch.cuda.memory_reserved(device) / 1024**3
+        payload["cuda_max_allocated_gb"] = torch.cuda.max_memory_allocated(device) / 1024**3
+    return payload
+
+
+def _sync_if_cuda(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
 
 
 def _write_config(config: AutoencoderTrainConfig) -> None:

@@ -180,6 +180,13 @@ Train on CUDA with batch size 16:
 scripts/train_autoencoder_cuda.sh
 ```
 
+CUDA scripts print step progress every 10 steps by default. Override it while
+diagnosing slow epochs:
+
+```bash
+LOG_EVERY_STEPS=1 scripts/train_autoencoder_cuda.sh
+```
+
 CUDA training uses PyTorch AMP mixed precision by default. Disable it only for
 numerical debugging:
 
