@@ -22,7 +22,12 @@ class DurationPredictor(nn.Module):
         self.text_embedding = nn.Embedding(vocab_size, text_dim)
         self.text_conv = nn.Sequential(
             *[
-                ConvNeXtBlock1d(dim=text_dim, intermediate_dim=256, kernel_size=5)
+                ConvNeXtBlock1d(
+                    dim=text_dim,
+                    intermediate_dim=256,
+                    kernel_size=5,
+                    layer_scale_init_value=1 / 6,
+                )
                 for _ in range(6)
             ]
         )

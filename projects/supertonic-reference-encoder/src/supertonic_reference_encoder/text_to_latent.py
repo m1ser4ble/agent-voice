@@ -48,8 +48,18 @@ class TextToLatentFlow(nn.Module):
         self.text_encoder = nn.Sequential(
             nn.Conv1d(text_dim, text_dim, kernel_size=5, padding=2),
             nn.GELU(),
-            ConvNeXtBlock1d(dim=text_dim, intermediate_dim=512, kernel_size=5),
-            ConvNeXtBlock1d(dim=text_dim, intermediate_dim=512, kernel_size=5),
+            ConvNeXtBlock1d(
+                dim=text_dim,
+                intermediate_dim=512,
+                kernel_size=5,
+                layer_scale_init_value=1 / 2,
+            ),
+            ConvNeXtBlock1d(
+                dim=text_dim,
+                intermediate_dim=512,
+                kernel_size=5,
+                layer_scale_init_value=1 / 2,
+            ),
         )
         self.style_key = nn.Linear(128, hidden_dim)
         self.style_value = nn.Linear(128, hidden_dim)
@@ -59,7 +69,12 @@ class TextToLatentFlow(nn.Module):
         self.time_project = nn.Linear(time_dim, hidden_dim)
         self.blocks = nn.Sequential(
             *[
-                ConvNeXtBlock1d(dim=hidden_dim, intermediate_dim=1024, kernel_size=5)
+                ConvNeXtBlock1d(
+                    dim=hidden_dim,
+                    intermediate_dim=1024,
+                    kernel_size=5,
+                    layer_scale_init_value=1 / 4,
+                )
                 for _ in range(4)
             ]
         )

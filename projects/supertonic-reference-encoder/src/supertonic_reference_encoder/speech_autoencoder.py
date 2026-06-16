@@ -90,6 +90,7 @@ class CausalConvNeXtBlock1d(nn.Module):
         intermediate_dim: int,
         kernel_size: int,
         dilation: int,
+        layer_scale_init_value: float | None,
     ) -> None:
         super().__init__()
         self.left_padding = (kernel_size - 1) * dilation
@@ -100,9 +101,14 @@ class CausalConvNeXtBlock1d(nn.Module):
             dilation=dilation,
             groups=dim,
         )
-        self.norm = nn.LayerNorm(dim)
+        self.norm = nn.LayerNorm(dim, eps=1e-6)
         self.pointwise_in = nn.Linear(dim, intermediate_dim)
         self.pointwise_out = nn.Linear(intermediate_dim, dim)
+        self.gamma = (
+            nn.Parameter(layer_scale_init_value * torch.ones(dim), requires_grad=True)
+            if layer_scale_init_value is not None and layer_scale_init_value > 0
+            else None
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
@@ -113,6 +119,8 @@ class CausalConvNeXtBlock1d(nn.Module):
         x = self.pointwise_in(x)
         x = F.gelu(x)
         x = self.pointwise_out(x)
+        if self.gamma is not None:
+            x = self.gamma * x
         x = x.transpose(1, 2)
         return x + residual
 
@@ -142,6 +150,7 @@ class LatentDecoder(nn.Module):
                     intermediate_dim=2048,
                     kernel_size=7,
                     dilation=dilation,
+                    layer_scale_init_value=1 / len(self.DILATIONS),
                 )
                 for dilation in self.DILATIONS
             ]
@@ -333,7 +342,7 @@ class _ResolutionDiscriminator(nn.Module):
             window=torch.hann_window(self.fft_size, device=waveform.device),
             return_complex=True,
         )
-        x = torch.log1p(torch.abs(spectrogram)).unsqueeze(1)
+        x = _linear_log_spectrogram(spectrogram).unsqueeze(1)
         features = []
         for index, layer in enumerate(self.layers):
             x = layer(x)
@@ -418,6 +427,10 @@ def _generator_adversarial_loss(outputs: list[DiscriminatorOutput]) -> torch.Ten
     return torch.stack(
         [F.mse_loss(output.score, torch.ones_like(output.score)) for output in outputs]
     ).mean()
+
+
+def _linear_log_spectrogram(spectrogram: torch.Tensor) -> torch.Tensor:
+    return torch.log(torch.clamp(torch.abs(spectrogram), min=1e-7))
 
 
 def _feature_matching_loss(
@@ -663,7 +676,18 @@ def _read_audio_manifest(path: Path) -> list[dict[str, Any]]:
 
 def load_autoencoder_checkpoint(model: SpeechAutoencoder, checkpoint_path: Path) -> None:
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    model.load_state_dict(checkpoint["model"])
+    incompatible = model.load_state_dict(checkpoint["model"], strict=False)
+    unexpected_keys = list(incompatible.unexpected_keys)
+    missing_keys = [
+        key
+        for key in incompatible.missing_keys
+        if not key.endswith(".gamma")
+    ]
+    if missing_keys or unexpected_keys:
+        raise RuntimeError(
+            "checkpoint is incompatible: "
+            f"missing={missing_keys}, unexpected={unexpected_keys}"
+        )
 
 
 def _resolve(root: Path, value: str) -> Path:

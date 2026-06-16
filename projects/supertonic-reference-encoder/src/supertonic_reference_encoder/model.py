@@ -33,6 +33,7 @@ class ConvNeXtBlock1d(nn.Module):
         dim: int,
         intermediate_dim: int,
         kernel_size: int,
+        layer_scale_init_value: float | None,
     ) -> None:
         super().__init__()
         padding = kernel_size // 2
@@ -43,9 +44,14 @@ class ConvNeXtBlock1d(nn.Module):
             padding=padding,
             groups=dim,
         )
-        self.norm = nn.LayerNorm(dim)
+        self.norm = nn.LayerNorm(dim, eps=1e-6)
         self.pointwise_in = nn.Linear(dim, intermediate_dim)
         self.pointwise_out = nn.Linear(intermediate_dim, dim)
+        self.gamma = (
+            nn.Parameter(layer_scale_init_value * torch.ones(dim), requires_grad=True)
+            if layer_scale_init_value is not None and layer_scale_init_value > 0
+            else None
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
@@ -55,6 +61,8 @@ class ConvNeXtBlock1d(nn.Module):
         x = self.pointwise_in(x)
         x = F.gelu(x)
         x = self.pointwise_out(x)
+        if self.gamma is not None:
+            x = self.gamma * x
         x = x.transpose(1, 2)
         return x + residual
 
@@ -81,6 +89,7 @@ class MelLatentEncoder(nn.Module):
                     dim=hidden_dim,
                     intermediate_dim=2048,
                     kernel_size=7,
+                    layer_scale_init_value=1 / 10,
                 )
                 for _ in range(10)
             ]
@@ -146,6 +155,7 @@ class TTLReferenceEncoder(nn.Module):
                     dim=TTL_ATTN_DIM,
                     intermediate_dim=512,
                     kernel_size=5,
+                    layer_scale_init_value=1 / 6,
                 )
                 for _ in range(6)
             ]
@@ -200,6 +210,7 @@ class DPReferenceEncoder(nn.Module):
                     dim=hidden_dim,
                     intermediate_dim=256,
                     kernel_size=5,
+                    layer_scale_init_value=1 / 4,
                 )
                 for _ in range(4)
             ]
@@ -254,7 +265,7 @@ class AudioToStyleEncoder(nn.Module):
 class _ChannelLayerNorm(nn.Module):
     def __init__(self, channels: int) -> None:
         super().__init__()
-        self.norm = nn.LayerNorm(channels)
+        self.norm = nn.LayerNorm(channels, eps=1e-6)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.norm(x.transpose(1, 2)).transpose(1, 2)

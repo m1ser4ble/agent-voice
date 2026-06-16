@@ -67,9 +67,36 @@ def test_encoder_accepts_variable_time_lengths():
 
 
 def test_convnext_block_preserves_sequence_shape():
-    block = ConvNeXtBlock1d(dim=64, intermediate_dim=256, kernel_size=5)
+    block = ConvNeXtBlock1d(
+        dim=64,
+        intermediate_dim=256,
+        kernel_size=5,
+        layer_scale_init_value=0.25,
+    )
     x = torch.randn(3, 64, 128)
 
     y = block(x)
 
     assert y.shape == x.shape
+
+
+def test_convnext_block_uses_vocos_layer_norm_and_layer_scale():
+    block = ConvNeXtBlock1d(
+        dim=64,
+        intermediate_dim=256,
+        kernel_size=5,
+        layer_scale_init_value=0.25,
+    )
+
+    assert block.norm.eps == 1e-6
+    assert block.gamma is not None
+    assert block.gamma.shape == (64,)
+    assert torch.allclose(block.gamma, torch.full((64,), 0.25))
+
+
+def test_reference_encoder_stacks_use_vocos_backbone_layer_scale_defaults():
+    latent_encoder = MelLatentEncoder()
+    ttl_encoder = TTLReferenceEncoder()
+
+    assert torch.allclose(latent_encoder.blocks[0].gamma, torch.full((512,), 0.1))
+    assert torch.allclose(ttl_encoder.blocks[0].gamma, torch.full((128,), 1 / 6))

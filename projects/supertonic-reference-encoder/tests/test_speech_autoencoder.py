@@ -18,6 +18,7 @@ from supertonic_reference_encoder.speech_autoencoder import (
     collate_waveforms,
     train_autoencoder,
     train_autoencoder_one_step,
+    _linear_log_spectrogram,
 )
 
 
@@ -75,6 +76,20 @@ def test_latent_decoder_uses_paper_dilation_pattern_and_projection_head():
     assert model.decoder.projection.out_channels == 2048
     assert model.decoder.frame_projection.in_features == 2048
     assert model.decoder.frame_projection.out_features == 512
+    assert model.decoder.blocks[0].norm.eps == 1e-6
+    assert torch.allclose(model.decoder.blocks[0].gamma, torch.full((512,), 0.1))
+
+
+def test_resolution_discriminator_uses_clipped_log_linear_spectrogram():
+    spectrogram = torch.tensor(
+        [[[0.0 + 0.0j, 1.0 + 0.0j, 3.0 + 4.0j]]],
+        dtype=torch.complex64,
+    )
+
+    logged = _linear_log_spectrogram(spectrogram)
+
+    expected = torch.log(torch.clamp(torch.abs(spectrogram), min=1e-7))
+    assert torch.allclose(logged, expected)
 
 
 def test_multiresolution_mel_loss_is_zero_for_identical_audio():
@@ -116,6 +131,8 @@ def test_paper_adversarial_loss_updates_generator_and_discriminator():
     discriminators = PaperAutoencoderAdversarialLoss(sample_rate=16_000)
     generator_optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
     discriminator_optimizer = torch.optim.AdamW(discriminators.parameters(), lr=1e-4)
+    generator_before = _flatten_parameters(model)
+    discriminator_before = _flatten_parameters(discriminators)
 
     output = model(waveform)
     metrics = discriminators.train_step(
@@ -131,6 +148,12 @@ def test_paper_adversarial_loss_updates_generator_and_discriminator():
     assert metrics["generator_adversarial_loss"] > 0.0
     assert metrics["feature_matching_loss"] >= 0.0
     assert metrics["discriminator_loss"] > 0.0
+    assert not torch.allclose(generator_before, _flatten_parameters(model))
+    assert not torch.allclose(discriminator_before, _flatten_parameters(discriminators))
+
+
+def _flatten_parameters(module: torch.nn.Module) -> torch.Tensor:
+    return torch.cat([parameter.detach().flatten().cpu() for parameter in module.parameters()])
 
 
 def test_train_autoencoder_one_step_runs_on_waveform_batch(tmp_path):
@@ -158,6 +181,20 @@ def test_load_autoencoder_checkpoint_restores_model_weights(tmp_path):
     source_first = next(source.parameters()).detach()
     target_first = next(target.parameters()).detach()
     assert torch.allclose(source_first, target_first)
+
+
+def test_load_autoencoder_checkpoint_tolerates_pre_layer_scale_checkpoints(tmp_path):
+    source = SpeechAutoencoder(sample_rate=16_000)
+    state = {
+        key: value
+        for key, value in source.state_dict().items()
+        if not key.endswith(".gamma")
+    }
+    checkpoint = tmp_path / "checkpoint.pt"
+    torch.save({"model": state}, checkpoint)
+    target = SpeechAutoencoder(sample_rate=16_000)
+
+    load_autoencoder_checkpoint(target, checkpoint)
 
 
 def test_evaluate_autoencoder_audio_returns_validation_metrics(tmp_path):
