@@ -391,11 +391,12 @@ class PaperAutoencoderAdversarialLoss(nn.Module):
         mixed_precision_enabled: bool = False,
         gradient_scaler: torch.amp.GradScaler | None = None,
     ) -> dict[str, float]:
+        real_loss, generated_loss = _loss_precision_waveforms(real, generated)
         discriminator_optimizer.zero_grad(set_to_none=True)
-        with _autocast(real.device, enabled=mixed_precision_enabled):
-            real_outputs = self(real)
-            fake_outputs = self(generated.detach())
-            discriminator_loss = _discriminator_loss(real_outputs, fake_outputs)
+        real_outputs = self(real_loss)
+        fake_outputs = self(generated_loss.detach())
+        discriminator_loss = _discriminator_loss(real_outputs, fake_outputs)
+        _assert_finite_losses({"discriminator_loss": discriminator_loss})
         _backward_and_step(
             discriminator_loss,
             optimizer=discriminator_optimizer,
@@ -403,20 +404,28 @@ class PaperAutoencoderAdversarialLoss(nn.Module):
         )
 
         generator_optimizer.zero_grad(set_to_none=True)
-        with _autocast(real.device, enabled=mixed_precision_enabled):
-            real_outputs_for_generator = self(real)
-            fake_outputs_for_generator = self(generated)
-            mel_loss = reconstruction_loss_fn(generated, real)
-            generator_adversarial_loss = _generator_adversarial_loss(fake_outputs_for_generator)
-            feature_matching_loss = _feature_matching_loss(
-                real_outputs_for_generator,
-                fake_outputs_for_generator,
-            )
-            loss = (
-                mel_loss
-                + self.adversarial_weight * generator_adversarial_loss
-                + self.feature_matching_weight * feature_matching_loss
-            )
+        real_outputs_for_generator = self(real_loss)
+        fake_outputs_for_generator = self(generated_loss)
+        mel_loss = reconstruction_loss_fn(generated_loss, real_loss)
+        generator_adversarial_loss = _generator_adversarial_loss(fake_outputs_for_generator)
+        feature_matching_loss = _feature_matching_loss(
+            real_outputs_for_generator,
+            fake_outputs_for_generator,
+        )
+        loss = (
+            mel_loss
+            + self.adversarial_weight * generator_adversarial_loss
+            + self.feature_matching_weight * feature_matching_loss
+        )
+        _assert_finite_losses(
+            {
+                "loss": loss,
+                "mel_loss": mel_loss,
+                "generator_adversarial_loss": generator_adversarial_loss,
+                "feature_matching_loss": feature_matching_loss,
+                "discriminator_loss": discriminator_loss,
+            }
+        )
         _backward_and_step(
             loss,
             optimizer=generator_optimizer,
@@ -463,6 +472,23 @@ def _feature_matching_loss(
         for real_feature, fake_feature in zip(real.features, fake.features):
             losses.append(F.l1_loss(fake_feature, real_feature.detach()))
     return torch.stack(losses).mean()
+
+
+def _loss_precision_waveforms(
+    real: torch.Tensor,
+    generated: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return real.float(), generated.float()
+
+
+def _assert_finite_losses(losses: dict[str, torch.Tensor]) -> None:
+    non_finite = [
+        name
+        for name, loss in losses.items()
+        if not torch.isfinite(loss.detach()).all().item()
+    ]
+    if non_finite:
+        raise RuntimeError(f"non-finite autoencoder loss: {', '.join(non_finite)}")
 
 
 @dataclass(frozen=True)

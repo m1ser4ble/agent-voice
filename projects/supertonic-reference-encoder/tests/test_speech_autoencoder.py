@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 import soundfile as sf
 import torch
 
@@ -18,7 +19,9 @@ from supertonic_reference_encoder.speech_autoencoder import (
     collate_waveforms,
     train_autoencoder,
     train_autoencoder_one_step,
+    _assert_finite_losses,
     _linear_log_spectrogram,
+    _loss_precision_waveforms,
     _resolve_mixed_precision,
 )
 
@@ -240,6 +243,28 @@ def test_train_autoencoder_one_step_passes_amp_state_to_adversarial_step(tmp_pat
     assert metrics["loss"] == 1.0
     assert adversarial_loss.seen_mixed_precision_enabled is False
     assert adversarial_loss.seen_gradient_scaler is None
+
+
+def test_amp_generated_audio_is_promoted_to_float32_for_gan_losses():
+    real = torch.randn(1, 128, dtype=torch.float32)
+    generated = torch.randn(1, 128, dtype=torch.float16, requires_grad=True)
+
+    real_loss, generated_loss = _loss_precision_waveforms(real, generated)
+    generated_loss.sum().backward()
+
+    assert real_loss.dtype == torch.float32
+    assert generated_loss.dtype == torch.float32
+    assert generated.grad is not None
+
+
+def test_non_finite_losses_fail_with_component_name():
+    with pytest.raises(RuntimeError, match="mel_loss"):
+        _assert_finite_losses(
+            {
+                "loss": torch.tensor(1.0),
+                "mel_loss": torch.tensor(float("nan")),
+            }
+        )
 
 
 def test_load_autoencoder_checkpoint_restores_model_weights(tmp_path):
