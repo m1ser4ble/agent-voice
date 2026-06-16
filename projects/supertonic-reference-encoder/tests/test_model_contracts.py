@@ -92,6 +92,9 @@ def test_convnext_block_uses_vocos_layer_norm_and_layer_scale():
     assert block.gamma is not None
     assert block.gamma.shape == (64,)
     assert torch.allclose(block.gamma, torch.full((64,), 0.25))
+    assert torch.allclose(block.depthwise.bias, torch.zeros_like(block.depthwise.bias))
+    assert torch.allclose(block.pointwise_in.bias, torch.zeros_like(block.pointwise_in.bias))
+    assert torch.allclose(block.pointwise_out.bias, torch.zeros_like(block.pointwise_out.bias))
 
 
 def test_reference_encoder_stacks_use_vocos_backbone_layer_scale_defaults():

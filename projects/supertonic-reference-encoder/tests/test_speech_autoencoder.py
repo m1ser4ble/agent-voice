@@ -78,6 +78,10 @@ def test_latent_decoder_uses_paper_dilation_pattern_and_projection_head():
     assert model.decoder.frame_projection.out_features == 512
     assert model.decoder.blocks[0].norm.eps == 1e-6
     assert torch.allclose(model.decoder.blocks[0].gamma, torch.full((512,), 0.1))
+    assert torch.allclose(
+        model.decoder.blocks[0].depthwise.bias,
+        torch.zeros_like(model.decoder.blocks[0].depthwise.bias),
+    )
 
 
 def test_resolution_discriminator_uses_clipped_log_linear_spectrogram():

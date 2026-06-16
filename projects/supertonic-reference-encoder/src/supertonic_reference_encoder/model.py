@@ -52,6 +52,7 @@ class ConvNeXtBlock1d(nn.Module):
             if layer_scale_init_value is not None and layer_scale_init_value > 0
             else None
         )
+        self.apply(_init_vocos_conv_or_linear)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
@@ -269,3 +270,10 @@ class _ChannelLayerNorm(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.norm(x.transpose(1, 2)).transpose(1, 2)
+
+
+def _init_vocos_conv_or_linear(module: nn.Module) -> None:
+    if isinstance(module, nn.Conv1d | nn.Linear):
+        nn.init.trunc_normal_(module.weight, std=0.02)
+        if module.bias is not None:
+            nn.init.constant_(module.bias, 0)

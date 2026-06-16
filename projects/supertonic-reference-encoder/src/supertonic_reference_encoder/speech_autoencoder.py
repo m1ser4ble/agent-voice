@@ -13,7 +13,13 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
 
 from supertonic_reference_encoder.audio import LogMelExtractor, load_audio
-from supertonic_reference_encoder.model import ConvNeXtBlock1d, LATENT_DIM, MEL_BANDS, MelLatentEncoder
+from supertonic_reference_encoder.model import (
+    ConvNeXtBlock1d,
+    LATENT_DIM,
+    MEL_BANDS,
+    MelLatentEncoder,
+    _init_vocos_conv_or_linear,
+)
 from supertonic_reference_encoder.target_audio_dataset import normalize_target_audio
 from supertonic_reference_encoder.train import _resolve_device
 
@@ -109,6 +115,7 @@ class CausalConvNeXtBlock1d(nn.Module):
             if layer_scale_init_value is not None and layer_scale_init_value > 0
             else None
         )
+        self.apply(_init_vocos_conv_or_linear)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
