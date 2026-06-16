@@ -180,6 +180,17 @@ Train on CUDA with batch size 16:
 scripts/train_autoencoder_cuda.sh
 ```
 
+CUDA training uses PyTorch AMP mixed precision by default. Disable it only for
+numerical debugging:
+
+```bash
+uv run supertonic-autoencoder-train \
+  --manifest data/public-autoencoder-sample/manifest.jsonl \
+  --output-dir runs/autoencoder-public-fp32-debug \
+  --device cuda \
+  --no-mixed-precision
+```
+
 Resume from a previous checkpoint:
 
 ```bash

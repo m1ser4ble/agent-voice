@@ -19,6 +19,7 @@ from supertonic_reference_encoder.speech_autoencoder import (
     train_autoencoder,
     train_autoencoder_one_step,
     _linear_log_spectrogram,
+    _resolve_mixed_precision,
 )
 
 
@@ -160,6 +161,34 @@ def _flatten_parameters(module: torch.nn.Module) -> torch.Tensor:
     return torch.cat([parameter.detach().flatten().cpu() for parameter in module.parameters()])
 
 
+class _TinyAutoencoder(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.tensor(1.0))
+
+    def forward(self, waveform: torch.Tensor):
+        return type("Output", (), {"waveform": waveform * self.scale})()
+
+
+class _RecordingAdversarialLoss(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.tensor(1.0))
+        self.seen_mixed_precision_enabled = None
+        self.seen_gradient_scaler = None
+
+    def train_step(self, **kwargs):
+        self.seen_mixed_precision_enabled = kwargs["mixed_precision_enabled"]
+        self.seen_gradient_scaler = kwargs["gradient_scaler"]
+        return {
+            "loss": 1.0,
+            "mel_loss": 1.0,
+            "generator_adversarial_loss": 1.0,
+            "feature_matching_loss": 0.0,
+            "discriminator_loss": 1.0,
+        }
+
+
 def test_train_autoencoder_one_step_runs_on_waveform_batch(tmp_path):
     audio = tmp_path / "voice.wav"
     manifest = tmp_path / "manifest.jsonl"
@@ -172,6 +201,45 @@ def test_train_autoencoder_one_step_runs_on_waveform_batch(tmp_path):
 
     assert metrics["loss"] > 0.0
     assert metrics["mel_loss"] > 0.0
+
+
+def test_mixed_precision_defaults_to_cuda_only():
+    config = AutoencoderTrainConfig(
+        manifest=Path("manifest.jsonl"),
+        output_dir=Path("runs"),
+    )
+
+    assert config.mixed_precision
+    assert _resolve_mixed_precision(torch.device("cuda"), requested=True)
+    assert not _resolve_mixed_precision(torch.device("cpu"), requested=True)
+    assert not _resolve_mixed_precision(torch.device("cuda"), requested=False)
+
+
+def test_train_autoencoder_one_step_passes_amp_state_to_adversarial_step(tmp_path):
+    audio = tmp_path / "voice.wav"
+    manifest = tmp_path / "manifest.jsonl"
+    _write_wav(audio)
+    manifest.write_text(json.dumps({"audio": str(audio)}) + "\n", encoding="utf-8")
+    dataset = WaveformDataset(manifest, sample_rate=16_000)
+    batch = collate_waveforms([dataset[0]])
+    model = _TinyAutoencoder()
+    adversarial_loss = _RecordingAdversarialLoss()
+
+    metrics = train_autoencoder_one_step(
+        batch,
+        device=torch.device("cpu"),
+        model=model,
+        optimizer=torch.optim.AdamW(model.parameters(), lr=1e-4),
+        loss_fn=MultiResolutionMelLoss(sample_rate=16_000),
+        adversarial_loss=adversarial_loss,
+        discriminator_optimizer=torch.optim.AdamW(adversarial_loss.parameters(), lr=1e-4),
+        mixed_precision_enabled=True,
+        gradient_scaler=object(),
+    )
+
+    assert metrics["loss"] == 1.0
+    assert adversarial_loss.seen_mixed_precision_enabled is False
+    assert adversarial_loss.seen_gradient_scaler is None
 
 
 def test_load_autoencoder_checkpoint_restores_model_weights(tmp_path):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -386,30 +387,42 @@ class PaperAutoencoderAdversarialLoss(nn.Module):
         generator_optimizer: torch.optim.Optimizer,
         discriminator_optimizer: torch.optim.Optimizer,
         reconstruction_loss_fn: MultiResolutionMelLoss,
+        mixed_precision_enabled: bool = False,
+        gradient_scaler: torch.amp.GradScaler | None = None,
     ) -> dict[str, float]:
         discriminator_optimizer.zero_grad(set_to_none=True)
-        real_outputs = self(real)
-        fake_outputs = self(generated.detach())
-        discriminator_loss = _discriminator_loss(real_outputs, fake_outputs)
-        discriminator_loss.backward()
-        discriminator_optimizer.step()
+        with _autocast(real.device, enabled=mixed_precision_enabled):
+            real_outputs = self(real)
+            fake_outputs = self(generated.detach())
+            discriminator_loss = _discriminator_loss(real_outputs, fake_outputs)
+        _backward_and_step(
+            discriminator_loss,
+            optimizer=discriminator_optimizer,
+            gradient_scaler=gradient_scaler,
+        )
 
         generator_optimizer.zero_grad(set_to_none=True)
-        real_outputs_for_generator = self(real)
-        fake_outputs_for_generator = self(generated)
-        mel_loss = reconstruction_loss_fn(generated, real)
-        generator_adversarial_loss = _generator_adversarial_loss(fake_outputs_for_generator)
-        feature_matching_loss = _feature_matching_loss(
-            real_outputs_for_generator,
-            fake_outputs_for_generator,
+        with _autocast(real.device, enabled=mixed_precision_enabled):
+            real_outputs_for_generator = self(real)
+            fake_outputs_for_generator = self(generated)
+            mel_loss = reconstruction_loss_fn(generated, real)
+            generator_adversarial_loss = _generator_adversarial_loss(fake_outputs_for_generator)
+            feature_matching_loss = _feature_matching_loss(
+                real_outputs_for_generator,
+                fake_outputs_for_generator,
+            )
+            loss = (
+                mel_loss
+                + self.adversarial_weight * generator_adversarial_loss
+                + self.feature_matching_weight * feature_matching_loss
+            )
+        _backward_and_step(
+            loss,
+            optimizer=generator_optimizer,
+            gradient_scaler=gradient_scaler,
         )
-        loss = (
-            mel_loss
-            + self.adversarial_weight * generator_adversarial_loss
-            + self.feature_matching_weight * feature_matching_loss
-        )
-        loss.backward()
-        generator_optimizer.step()
+        if gradient_scaler is not None:
+            gradient_scaler.update()
         return {
             "loss": float(loss.detach().cpu()),
             "mel_loss": float(mel_loss.detach().cpu()),
@@ -465,6 +478,7 @@ class AutoencoderTrainConfig:
     save_optimizer: bool = False
     resume: Path | None = None
     validation_audio: Path | None = None
+    mixed_precision: bool = True
 
 
 def train_autoencoder_one_step(
@@ -476,7 +490,14 @@ def train_autoencoder_one_step(
     loss_fn: MultiResolutionMelLoss | None = None,
     adversarial_loss: PaperAutoencoderAdversarialLoss | None = None,
     discriminator_optimizer: torch.optim.Optimizer | None = None,
+    mixed_precision_enabled: bool = False,
+    gradient_scaler: torch.amp.GradScaler | None = None,
 ) -> dict[str, float]:
+    mixed_precision_enabled = _resolve_mixed_precision(
+        device,
+        requested=mixed_precision_enabled,
+    )
+    gradient_scaler = gradient_scaler if mixed_precision_enabled else None
     model = (model or SpeechAutoencoder(sample_rate=16_000)).to(device)
     optimizer = optimizer or torch.optim.AdamW(model.parameters(), lr=1e-4)
     loss_fn = (loss_fn or MultiResolutionMelLoss(sample_rate=16_000)).to(device)
@@ -491,13 +512,16 @@ def train_autoencoder_one_step(
     adversarial_loss.train()
 
     waveform = batch.waveform.to(device)
-    output = model(waveform)
+    with _autocast(device, enabled=mixed_precision_enabled):
+        output = model(waveform)
     return adversarial_loss.train_step(
         real=waveform,
         generated=output.waveform,
         generator_optimizer=optimizer,
         discriminator_optimizer=discriminator_optimizer,
         reconstruction_loss_fn=loss_fn,
+        mixed_precision_enabled=mixed_precision_enabled,
+        gradient_scaler=gradient_scaler,
     )
 
 
@@ -553,6 +577,15 @@ def train_autoencoder(config: AutoencoderTrainConfig) -> dict[str, float]:
         adversarial_loss.parameters(),
         lr=config.learning_rate,
     )
+    mixed_precision_enabled = _resolve_mixed_precision(
+        device,
+        requested=config.mixed_precision,
+    )
+    gradient_scaler = (
+        torch.amp.GradScaler(device.type, enabled=True)
+        if mixed_precision_enabled
+        else None
+    )
     config.output_dir.mkdir(parents=True, exist_ok=True)
     _write_config(config)
     validation_audio = (
@@ -585,6 +618,8 @@ def train_autoencoder(config: AutoencoderTrainConfig) -> dict[str, float]:
                 loss_fn=loss_fn,
                 adversarial_loss=adversarial_loss,
                 discriminator_optimizer=discriminator_optimizer,
+                mixed_precision_enabled=mixed_precision_enabled,
+                gradient_scaler=gradient_scaler,
             )
             for key in totals:
                 totals[key] += metrics[key]
@@ -643,6 +678,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--save-optimizer", action="store_true")
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--validation-audio", type=Path)
+    parser.add_argument(
+        "--mixed-precision",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use CUDA AMP fp16 training when the resolved device is CUDA.",
+    )
     return parser.parse_args(argv)
 
 
@@ -662,6 +703,7 @@ def main(argv: list[str] | None = None) -> int:
             save_optimizer=args.save_optimizer,
             resume=args.resume,
             validation_audio=args.validation_audio,
+            mixed_precision=args.mixed_precision,
         )
     )
     return 0
@@ -702,6 +744,30 @@ def _resolve(root: Path, value: str) -> Path:
     if path.is_absolute():
         return path
     return root / path
+
+
+def _resolve_mixed_precision(device: torch.device, *, requested: bool) -> bool:
+    return requested and device.type == "cuda"
+
+
+def _autocast(device: torch.device, *, enabled: bool):
+    if not enabled:
+        return nullcontext()
+    return torch.amp.autocast(device.type, dtype=torch.float16, enabled=True)
+
+
+def _backward_and_step(
+    loss: torch.Tensor,
+    *,
+    optimizer: torch.optim.Optimizer,
+    gradient_scaler: torch.amp.GradScaler | None,
+) -> None:
+    if gradient_scaler is None:
+        loss.backward()
+        optimizer.step()
+        return
+    gradient_scaler.scale(loss).backward()
+    gradient_scaler.step(optimizer)
 
 
 def _write_config(config: AutoencoderTrainConfig) -> None:
