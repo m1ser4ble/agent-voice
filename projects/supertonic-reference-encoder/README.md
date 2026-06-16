@@ -187,8 +187,20 @@ diagnosing slow epochs:
 LOG_EVERY_STEPS=1 scripts/train_autoencoder_cuda.sh
 ```
 
-CUDA training uses PyTorch AMP mixed precision by default. Disable it only for
-numerical debugging:
+CUDA training uses PyTorch AMP mixed precision by default. On CUDA, the default
+AMP dtype is `bf16` when the device supports it, falling back to `fp16`
+otherwise. Use `MIXED_PRECISION=0` for the most stable fp32 path, or
+`AMP_DTYPE=fp16` to force the older fp16 path:
+
+```bash
+MIXED_PRECISION=0 OUTPUT_DIR=runs/autoencoder-public-fp32-debug \
+scripts/train_autoencoder_cuda.sh
+
+AMP_DTYPE=fp16 OUTPUT_DIR=runs/autoencoder-public-fp16-debug \
+scripts/train_autoencoder_cuda.sh
+```
+
+The equivalent direct CLI flag is:
 
 ```bash
 uv run supertonic-autoencoder-train \

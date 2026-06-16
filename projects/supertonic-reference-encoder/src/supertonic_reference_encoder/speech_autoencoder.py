@@ -529,6 +529,7 @@ class AutoencoderTrainConfig:
     resume: Path | None = None
     validation_audio: Path | None = None
     mixed_precision: bool = True
+    amp_dtype: str = "bf16"
     log_every_steps: int = 0
 
 
@@ -542,6 +543,7 @@ def train_autoencoder_one_step(
     adversarial_loss: PaperAutoencoderAdversarialLoss | None = None,
     discriminator_optimizer: torch.optim.Optimizer | None = None,
     mixed_precision_enabled: bool = False,
+    amp_dtype: torch.dtype = torch.float16,
     gradient_scaler: torch.amp.GradScaler | None = None,
 ) -> dict[str, float]:
     mixed_precision_enabled = _resolve_mixed_precision(
@@ -563,7 +565,7 @@ def train_autoencoder_one_step(
     adversarial_loss.train()
 
     waveform = batch.waveform.to(device)
-    with _autocast(device, enabled=mixed_precision_enabled):
+    with _autocast(device, enabled=mixed_precision_enabled, amp_dtype=amp_dtype):
         output = model(waveform)
     return adversarial_loss.train_step(
         real=waveform,
@@ -632,10 +634,14 @@ def train_autoencoder(config: AutoencoderTrainConfig) -> dict[str, float]:
         device,
         requested=config.mixed_precision,
     )
-    gradient_scaler = (
-        torch.amp.GradScaler(device.type, enabled=True)
-        if mixed_precision_enabled
-        else None
+    amp_dtype = _resolve_amp_dtype(
+        device,
+        requested=config.amp_dtype,
+    )
+    gradient_scaler = _resolve_gradient_scaler(
+        device,
+        enabled=mixed_precision_enabled,
+        amp_dtype=amp_dtype,
     )
     config.output_dir.mkdir(parents=True, exist_ok=True)
     _write_config(config)
@@ -672,6 +678,7 @@ def train_autoencoder(config: AutoencoderTrainConfig) -> dict[str, float]:
                 adversarial_loss=adversarial_loss,
                 discriminator_optimizer=discriminator_optimizer,
                 mixed_precision_enabled=mixed_precision_enabled,
+                amp_dtype=amp_dtype,
                 gradient_scaler=gradient_scaler,
             )
             _sync_if_cuda(device)
@@ -691,6 +698,7 @@ def train_autoencoder(config: AutoencoderTrainConfig) -> dict[str, float]:
                             metrics=metrics,
                             device=device,
                             mixed_precision_enabled=mixed_precision_enabled,
+                            amp_dtype=amp_dtype,
                         ),
                         ensure_ascii=False,
                     ),
@@ -755,7 +763,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--mixed-precision",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Use CUDA AMP fp16 training when the resolved device is CUDA.",
+        help="Use CUDA AMP mixed precision when the resolved device is CUDA.",
+    )
+    parser.add_argument(
+        "--amp-dtype",
+        choices=("bf16", "fp16"),
+        default="bf16",
+        help="AMP dtype for CUDA mixed precision. bf16 falls back to fp16 when unsupported.",
     )
     return parser.parse_args(argv)
 
@@ -777,6 +791,7 @@ def main(argv: list[str] | None = None) -> int:
             resume=args.resume,
             validation_audio=args.validation_audio,
             mixed_precision=args.mixed_precision,
+            amp_dtype=args.amp_dtype,
             log_every_steps=args.log_every_steps,
         )
     )
@@ -824,10 +839,36 @@ def _resolve_mixed_precision(device: torch.device, *, requested: bool) -> bool:
     return requested and device.type == "cuda"
 
 
-def _autocast(device: torch.device, *, enabled: bool):
+def _resolve_amp_dtype(device: torch.device, *, requested: str) -> torch.dtype:
+    if requested == "fp16":
+        return torch.float16
+    if requested == "bf16":
+        if device.type == "cuda" and torch.cuda.is_bf16_supported():
+            return torch.bfloat16
+        return torch.float16
+    raise ValueError(f"unsupported AMP dtype: {requested}")
+
+
+def _resolve_gradient_scaler(
+    device: torch.device,
+    *,
+    enabled: bool,
+    amp_dtype: torch.dtype,
+) -> torch.amp.GradScaler | None:
+    if not enabled or amp_dtype != torch.float16:
+        return None
+    return torch.amp.GradScaler(device.type, enabled=True)
+
+
+def _autocast(
+    device: torch.device,
+    *,
+    enabled: bool,
+    amp_dtype: torch.dtype = torch.float16,
+):
     if not enabled:
         return nullcontext()
-    return torch.amp.autocast(device.type, dtype=torch.float16, enabled=True)
+    return torch.amp.autocast(device.type, dtype=amp_dtype, enabled=True)
 
 
 def _backward_and_step(
@@ -858,6 +899,7 @@ def _step_log_payload(
     metrics: dict[str, float],
     device: torch.device,
     mixed_precision_enabled: bool,
+    amp_dtype: torch.dtype,
 ) -> dict[str, float | int | str | bool]:
     payload: dict[str, float | int | str | bool] = {
         "event": "autoencoder_step",
@@ -869,6 +911,7 @@ def _step_log_payload(
         "batch_max_samples": int(batch.waveform.shape[1]),
         "device": device.type,
         "mixed_precision": mixed_precision_enabled,
+        "amp_dtype": str(amp_dtype).removeprefix("torch."),
     }
     payload.update({key: float(value) for key, value in metrics.items()})
     if device.type == "cuda":

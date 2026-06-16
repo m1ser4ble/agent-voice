@@ -14,6 +14,8 @@ MAX_SECONDS="${MAX_SECONDS:-3.0}"
 LEARNING_RATE="${LEARNING_RATE:-0.00001}"
 AUTO_PREPARE_MANIFEST="${AUTO_PREPARE_MANIFEST:-1}"
 LOG_EVERY_STEPS="${LOG_EVERY_STEPS:-10}"
+MIXED_PRECISION="${MIXED_PRECISION:-1}"
+AMP_DTYPE="${AMP_DTYPE:-bf16}"
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
   echo "ffmpeg not found. Install ffmpeg before training with MP3 validation audio." >&2
@@ -49,15 +51,24 @@ fi
 
 uv run supertonic-check-audio-manifest --manifest "$MANIFEST"
 
-uv run supertonic-autoencoder-train \
-  --manifest "$MANIFEST" \
-  --output-dir "$OUTPUT_DIR" \
-  --resume "$RESUME" \
-  --validation-audio "$VALIDATION_AUDIO" \
-  --epochs "$EPOCHS" \
-  --batch-size "$BATCH_SIZE" \
-  --num-workers "$NUM_WORKERS" \
-  --device cuda \
-  --max-seconds "$MAX_SECONDS" \
-  --learning-rate "$LEARNING_RATE" \
+args=(
+  uv run supertonic-autoencoder-train
+  --manifest "$MANIFEST"
+  --output-dir "$OUTPUT_DIR"
+  --resume "$RESUME"
+  --validation-audio "$VALIDATION_AUDIO"
+  --epochs "$EPOCHS"
+  --batch-size "$BATCH_SIZE"
+  --num-workers "$NUM_WORKERS"
+  --device cuda
+  --max-seconds "$MAX_SECONDS"
+  --learning-rate "$LEARNING_RATE"
   --log-every-steps "$LOG_EVERY_STEPS"
+  --amp-dtype "$AMP_DTYPE"
+)
+
+if [[ "$MIXED_PRECISION" == "0" ]]; then
+  args+=(--no-mixed-precision)
+fi
+
+"${args[@]}"

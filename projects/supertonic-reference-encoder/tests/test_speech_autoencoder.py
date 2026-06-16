@@ -23,6 +23,8 @@ from supertonic_reference_encoder.speech_autoencoder import (
     _linear_log_spectrogram,
     _loss_precision_waveforms,
     _sanitize_waveform_for_discriminator,
+    _resolve_amp_dtype,
+    _resolve_gradient_scaler,
     _resolve_mixed_precision,
 )
 
@@ -214,9 +216,24 @@ def test_mixed_precision_defaults_to_cuda_only():
     )
 
     assert config.mixed_precision
+    assert config.amp_dtype == "bf16"
     assert _resolve_mixed_precision(torch.device("cuda"), requested=True)
     assert not _resolve_mixed_precision(torch.device("cpu"), requested=True)
     assert not _resolve_mixed_precision(torch.device("cuda"), requested=False)
+
+
+def test_amp_dtype_defaults_to_bfloat16_when_cuda_supports_it(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: True)
+
+    assert _resolve_amp_dtype(torch.device("cuda"), requested="bf16") == torch.bfloat16
+    assert _resolve_amp_dtype(torch.device("cuda"), requested="fp16") == torch.float16
+    assert _resolve_gradient_scaler(torch.device("cuda"), enabled=True, amp_dtype=torch.bfloat16) is None
+
+
+def test_amp_dtype_falls_back_to_float16_without_bfloat16_support(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: False)
+
+    assert _resolve_amp_dtype(torch.device("cuda"), requested="bf16") == torch.float16
 
 
 def test_train_autoencoder_one_step_passes_amp_state_to_adversarial_step(tmp_path):
