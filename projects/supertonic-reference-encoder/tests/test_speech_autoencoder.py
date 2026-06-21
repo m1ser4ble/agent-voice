@@ -67,6 +67,14 @@ def test_speech_autoencoder_reconstructs_waveform_from_24_dimensional_latent(tmp
 def test_latent_decoder_uses_paper_dilation_pattern_and_projection_head():
     model = SpeechAutoencoder(sample_rate=16_000)
 
+    assert [type(layer) for layer in model.encoder.input] == [
+        torch.nn.Conv1d,
+        torch.nn.BatchNorm1d,
+    ]
+    assert [type(layer) for layer in model.decoder.input] == [
+        torch.nn.Conv1d,
+        torch.nn.BatchNorm1d,
+    ]
     assert model.decoder.input[0].padding == (0,)
     assert [block.depthwise.dilation[0] for block in model.decoder.blocks] == [
         1,
@@ -84,15 +92,8 @@ def test_latent_decoder_uses_paper_dilation_pattern_and_projection_head():
     assert model.decoder.projection.kernel_size == (3,)
     assert model.decoder.projection.in_channels == 512
     assert model.decoder.projection.out_channels == 2048
-    assert [type(layer) for layer in model.decoder.frame_projection] == [
-        torch.nn.Linear,
-        torch.nn.PReLU,
-        torch.nn.Linear,
-    ]
-    assert model.decoder.frame_projection[0].in_features == 2048
-    assert model.decoder.frame_projection[0].out_features == 2048
-    assert model.decoder.frame_projection[2].in_features == 2048
-    assert model.decoder.frame_projection[2].out_features == 512
+    assert model.decoder.frame_projection.in_features == 2048
+    assert model.decoder.frame_projection.out_features == 512
     assert model.decoder.blocks[0].norm.eps == 1e-6
     assert torch.allclose(model.decoder.blocks[0].gamma, torch.full((512,), 0.1))
     assert torch.allclose(
@@ -375,24 +376,24 @@ def test_load_autoencoder_checkpoint_tolerates_pre_layer_scale_checkpoints(tmp_p
     load_autoencoder_checkpoint(target, checkpoint)
 
 
-def test_load_autoencoder_checkpoint_migrates_pre_prelu_decoder_head(tmp_path):
+def test_load_autoencoder_checkpoint_migrates_pre_single_linear_decoder_head(tmp_path):
     source = SpeechAutoencoder(sample_rate=16_000)
     state = source.state_dict()
-    old_decoder_weight = state.pop("decoder.frame_projection.2.weight")
-    old_decoder_bias = state.pop("decoder.frame_projection.2.bias")
-    state.pop("decoder.frame_projection.0.weight")
-    state.pop("decoder.frame_projection.0.bias")
-    state.pop("decoder.frame_projection.1.weight")
-    state["decoder.frame_projection.weight"] = old_decoder_weight
-    state["decoder.frame_projection.bias"] = old_decoder_bias
+    old_decoder_weight = state.pop("decoder.frame_projection.weight")
+    old_decoder_bias = state.pop("decoder.frame_projection.bias")
+    state["decoder.frame_projection.2.weight"] = old_decoder_weight
+    state["decoder.frame_projection.2.bias"] = old_decoder_bias
+    state["decoder.frame_projection.0.weight"] = torch.eye(2048)
+    state["decoder.frame_projection.0.bias"] = torch.zeros(2048)
+    state["decoder.frame_projection.1.weight"] = torch.ones(1)
     checkpoint = tmp_path / "checkpoint.pt"
     torch.save({"model": state}, checkpoint)
     target = SpeechAutoencoder(sample_rate=16_000)
 
     load_autoencoder_checkpoint(target, checkpoint)
 
-    assert torch.allclose(target.decoder.frame_projection[2].weight, old_decoder_weight)
-    assert torch.allclose(target.decoder.frame_projection[2].bias, old_decoder_bias)
+    assert torch.allclose(target.decoder.frame_projection.weight, old_decoder_weight)
+    assert torch.allclose(target.decoder.frame_projection.bias, old_decoder_bias)
 
 
 def test_evaluate_autoencoder_audio_returns_validation_metrics(tmp_path):

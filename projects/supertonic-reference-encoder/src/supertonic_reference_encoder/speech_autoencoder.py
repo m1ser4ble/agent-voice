@@ -150,7 +150,6 @@ class LatentDecoder(nn.Module):
         self.input = nn.Sequential(
             nn.Conv1d(LATENT_DIM, hidden_dim, kernel_size=7),
             nn.BatchNorm1d(hidden_dim),
-            nn.GELU(),
         )
         self.blocks = nn.Sequential(
             *[
@@ -166,11 +165,7 @@ class LatentDecoder(nn.Module):
         )
         self.post_norm = nn.BatchNorm1d(hidden_dim)
         self.projection = nn.Conv1d(hidden_dim, 2048, kernel_size=3)
-        self.frame_projection = nn.Sequential(
-            nn.Linear(2048, 2048),
-            nn.PReLU(),
-            nn.Linear(2048, frame_size),
-        )
+        self.frame_projection = nn.Linear(2048, frame_size)
 
     def forward(self, latent: torch.Tensor, *, target_samples: int | None = None) -> torch.Tensor:
         x = self.blocks(self.input(F.pad(latent, (6, 0))))
@@ -591,15 +586,15 @@ def train_autoencoder_one_step(
         requested=mixed_precision_enabled,
     )
     gradient_scaler = gradient_scaler if mixed_precision_enabled else None
-    model = (model or SpeechAutoencoder(sample_rate=16_000)).to(device)
-    optimizer = optimizer or torch.optim.AdamW(model.parameters(), lr=1e-4)
-    loss_fn = (loss_fn or MultiResolutionMelLoss(sample_rate=16_000)).to(device)
-    adversarial_loss = (adversarial_loss or PaperAutoencoderAdversarialLoss(sample_rate=16_000)).to(
+    model = (model or SpeechAutoencoder(sample_rate=44_100)).to(device)
+    optimizer = optimizer or torch.optim.AdamW(model.parameters(), lr=2e-4)
+    loss_fn = (loss_fn or MultiResolutionMelLoss(sample_rate=44_100)).to(device)
+    adversarial_loss = (adversarial_loss or PaperAutoencoderAdversarialLoss(sample_rate=44_100)).to(
         device
     )
     discriminator_optimizer = discriminator_optimizer or torch.optim.AdamW(
         adversarial_loss.parameters(),
-        lr=1e-4,
+        lr=2e-4,
     )
     model.train()
     adversarial_loss.train()
@@ -876,26 +871,24 @@ def _migrate_autoencoder_checkpoint_state(
     migrated = dict(state)
     old_weight_key = "decoder.frame_projection.weight"
     old_bias_key = "decoder.frame_projection.bias"
-    new_first_weight_key = "decoder.frame_projection.0.weight"
-    new_first_bias_key = "decoder.frame_projection.0.bias"
-    new_prelu_key = "decoder.frame_projection.1.weight"
-    new_final_weight_key = "decoder.frame_projection.2.weight"
-    new_final_bias_key = "decoder.frame_projection.2.bias"
-    if old_weight_key not in migrated or old_bias_key not in migrated:
+    sequential_weight_key = "decoder.frame_projection.2.weight"
+    sequential_bias_key = "decoder.frame_projection.2.bias"
+    sequential_keys = {
+        "decoder.frame_projection.0.weight",
+        "decoder.frame_projection.0.bias",
+        "decoder.frame_projection.1.weight",
+        sequential_weight_key,
+        sequential_bias_key,
+    }
+    if old_weight_key in migrated or old_bias_key in migrated:
         return migrated
-    if new_final_weight_key in migrated or new_final_bias_key in migrated:
+    if not sequential_keys <= migrated.keys():
         return migrated
 
-    model_state = model.state_dict()
-    migrated[new_final_weight_key] = migrated.pop(old_weight_key)
-    migrated[new_final_bias_key] = migrated.pop(old_bias_key)
-    migrated[new_first_weight_key] = torch.eye(
-        model_state[new_first_weight_key].shape[0],
-        model_state[new_first_weight_key].shape[1],
-        dtype=model_state[new_first_weight_key].dtype,
-    )
-    migrated[new_first_bias_key] = torch.zeros_like(model_state[new_first_bias_key])
-    migrated[new_prelu_key] = model_state[new_prelu_key]
+    migrated[old_weight_key] = migrated.pop(sequential_weight_key)
+    migrated[old_bias_key] = migrated.pop(sequential_bias_key)
+    for key in sequential_keys - {sequential_weight_key, sequential_bias_key}:
+        migrated.pop(key)
     return migrated
 
 

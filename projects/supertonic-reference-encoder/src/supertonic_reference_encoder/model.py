@@ -82,7 +82,6 @@ class MelLatentEncoder(nn.Module):
         self.input = nn.Sequential(
             nn.Conv1d(MEL_BANDS, hidden_dim, kernel_size=7, padding=3),
             nn.BatchNorm1d(hidden_dim),
-            nn.GELU(),
         )
         self.blocks = nn.Sequential(
             *[
