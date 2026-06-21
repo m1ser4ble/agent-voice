@@ -106,9 +106,13 @@ The autoencoder follows the paper's GAN training setup:
   - lightweight MPD periods 2, 3, 5, 7, 11
   - MRD FFT sizes 512, 1024, 2048
 - generator objective:
-  - reconstruction loss
-  - adversarial loss
-  - feature matching loss
+  - `45 * reconstruction loss`
+  - `1 * adversarial loss`
+  - `0.1 * feature matching loss`
+- discriminator objective:
+  - real speech target: `1`
+  - generated speech target: `-1`
+- adversarial training crops real and generated speech to `0.19s`
 
 This stage does not produce `style_ttl/style_dp` yet. It learns the 24-d speech
 latent space that the reference encoders should consume.
@@ -179,6 +183,10 @@ Train on CUDA with batch size 16:
 ```bash
 scripts/train_autoencoder_cuda.sh
 ```
+
+The paper used learning rate `0.0002` and batch size `128` across four RTX 4090
+GPUs. The local CUDA script keeps batch size `16` for smaller machines but uses
+the same default learning rate.
 
 CUDA scripts print step progress every 10 steps by default. Override it while
 diagnosing slow epochs:
@@ -266,6 +274,12 @@ This uses weaker target pressure than the default target fine-tune:
 The intent is to keep the processed/intercom tone while reducing speech
 smearing. Use preview audio, not loss alone, to choose whether this checkpoint is
 better than the stronger target fine-tune.
+
+For speech autoencoder checkpoints, `mel_loss` and `waveform_l1` are not enough
+to claim intelligible reconstruction. Always check generated preview audio, and
+for transcribed fixtures also run STT/CER on the generated waveform. A checkpoint
+can reduce spectral loss while still producing speech that Whisper transcribes as
+empty text.
 
 Outputs:
 

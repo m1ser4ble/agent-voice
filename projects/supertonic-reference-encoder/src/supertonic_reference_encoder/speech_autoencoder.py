@@ -166,7 +166,11 @@ class LatentDecoder(nn.Module):
         )
         self.post_norm = nn.BatchNorm1d(hidden_dim)
         self.projection = nn.Conv1d(hidden_dim, 2048, kernel_size=3)
-        self.frame_projection = nn.Linear(2048, frame_size)
+        self.frame_projection = nn.Sequential(
+            nn.Linear(2048, 2048),
+            nn.PReLU(),
+            nn.Linear(2048, frame_size),
+        )
 
     def forward(self, latent: torch.Tensor, *, target_samples: int | None = None) -> torch.Tensor:
         x = self.blocks(self.input(F.pad(latent, (6, 0))))
@@ -368,14 +372,19 @@ class PaperAutoencoderAdversarialLoss(nn.Module):
         self,
         *,
         sample_rate: int = 44_100,
-        feature_matching_weight: float = 2.0,
+        reconstruction_weight: float = 45.0,
         adversarial_weight: float = 1.0,
+        feature_matching_weight: float = 0.1,
+        adversarial_crop_seconds: float = 0.19,
     ) -> None:
         super().__init__()
+        self.sample_rate = sample_rate
         self.mpd = MultiPeriodDiscriminator()
         self.mrd = MultiResolutionDiscriminator(sample_rate=sample_rate)
+        self.reconstruction_weight = reconstruction_weight
         self.feature_matching_weight = feature_matching_weight
         self.adversarial_weight = adversarial_weight
+        self.adversarial_crop_seconds = adversarial_crop_seconds
 
     def forward(self, waveform: torch.Tensor) -> list[DiscriminatorOutput]:
         return [*self.mpd(waveform), *self.mrd(waveform)]
@@ -392,8 +401,14 @@ class PaperAutoencoderAdversarialLoss(nn.Module):
         gradient_scaler: torch.amp.GradScaler | None = None,
     ) -> dict[str, float]:
         real_loss, generated_loss = _loss_precision_waveforms(real, generated)
-        real_discriminator = _sanitize_waveform_for_discriminator(real_loss)
-        generated_discriminator = _sanitize_waveform_for_discriminator(generated_loss)
+        real_adversarial, generated_adversarial = _crop_adversarial_waveforms(
+            real_loss,
+            generated_loss,
+            sample_rate=self.sample_rate,
+            crop_seconds=self.adversarial_crop_seconds,
+        )
+        real_discriminator = _sanitize_waveform_for_discriminator(real_adversarial)
+        generated_discriminator = _sanitize_waveform_for_discriminator(generated_adversarial)
         discriminator_optimizer.zero_grad(set_to_none=True)
         real_outputs = self(real_discriminator)
         fake_outputs = self(generated_discriminator.detach())
@@ -417,7 +432,7 @@ class PaperAutoencoderAdversarialLoss(nn.Module):
             fake_outputs_for_generator,
         )
         loss = (
-            mel_loss
+            self.reconstruction_weight * mel_loss
             + self.adversarial_weight * generator_adversarial_loss
             + self.feature_matching_weight * feature_matching_loss
         )
@@ -453,7 +468,7 @@ def _discriminator_loss(
     losses = []
     for real, fake in zip(real_outputs, fake_outputs):
         losses.append(F.mse_loss(real.score, torch.ones_like(real.score)))
-        losses.append(F.mse_loss(fake.score, torch.zeros_like(fake.score)))
+        losses.append(F.mse_loss(fake.score, -torch.ones_like(fake.score)))
     return torch.stack(losses).mean()
 
 
@@ -483,6 +498,31 @@ def _loss_precision_waveforms(
     generated: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     return real.float(), generated.float()
+
+
+def _crop_adversarial_waveforms(
+    real: torch.Tensor,
+    generated: torch.Tensor,
+    *,
+    sample_rate: int,
+    crop_seconds: float,
+    generator: torch.Generator | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    crop_samples = int(sample_rate * crop_seconds)
+    if crop_samples <= 0 or real.shape[-1] <= crop_samples:
+        return real, generated
+    max_start = real.shape[-1] - crop_samples
+    start = int(
+        torch.randint(
+            low=0,
+            high=max_start + 1,
+            size=(1,),
+            generator=generator,
+            device=real.device,
+        ).item()
+    )
+    end = start + crop_samples
+    return real[..., start:end], generated[..., start:end]
 
 
 def _sanitize_waveform_for_discriminator(waveform: torch.Tensor) -> torch.Tensor:
@@ -520,7 +560,7 @@ class AutoencoderTrainConfig:
     output_dir: Path
     epochs: int = 10
     batch_size: int = 4
-    learning_rate: float = 1e-4
+    learning_rate: float = 2e-4
     sample_rate: int = 44_100
     max_seconds: float = 12.0
     num_workers: int = 0
@@ -750,7 +790,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--sample-rate", type=int, default=44_100)
     parser.add_argument("--max-seconds", type=float, default=12.0)
     parser.add_argument("--num-workers", type=int, default=0)
@@ -814,7 +854,8 @@ def _read_audio_manifest(path: Path) -> list[dict[str, Any]]:
 
 def load_autoencoder_checkpoint(model: SpeechAutoencoder, checkpoint_path: Path) -> None:
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    incompatible = model.load_state_dict(checkpoint["model"], strict=False)
+    state = _migrate_autoencoder_checkpoint_state(model, checkpoint["model"])
+    incompatible = model.load_state_dict(state, strict=False)
     unexpected_keys = list(incompatible.unexpected_keys)
     missing_keys = [
         key
@@ -826,6 +867,36 @@ def load_autoencoder_checkpoint(model: SpeechAutoencoder, checkpoint_path: Path)
             "checkpoint is incompatible: "
             f"missing={missing_keys}, unexpected={unexpected_keys}"
         )
+
+
+def _migrate_autoencoder_checkpoint_state(
+    model: SpeechAutoencoder,
+    state: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    migrated = dict(state)
+    old_weight_key = "decoder.frame_projection.weight"
+    old_bias_key = "decoder.frame_projection.bias"
+    new_first_weight_key = "decoder.frame_projection.0.weight"
+    new_first_bias_key = "decoder.frame_projection.0.bias"
+    new_prelu_key = "decoder.frame_projection.1.weight"
+    new_final_weight_key = "decoder.frame_projection.2.weight"
+    new_final_bias_key = "decoder.frame_projection.2.bias"
+    if old_weight_key not in migrated or old_bias_key not in migrated:
+        return migrated
+    if new_final_weight_key in migrated or new_final_bias_key in migrated:
+        return migrated
+
+    model_state = model.state_dict()
+    migrated[new_final_weight_key] = migrated.pop(old_weight_key)
+    migrated[new_final_bias_key] = migrated.pop(old_bias_key)
+    migrated[new_first_weight_key] = torch.eye(
+        model_state[new_first_weight_key].shape[0],
+        model_state[new_first_weight_key].shape[1],
+        dtype=model_state[new_first_weight_key].dtype,
+    )
+    migrated[new_first_bias_key] = torch.zeros_like(model_state[new_first_bias_key])
+    migrated[new_prelu_key] = model_state[new_prelu_key]
+    return migrated
 
 
 def _resolve(root: Path, value: str) -> Path:

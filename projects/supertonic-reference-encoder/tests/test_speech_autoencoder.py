@@ -8,6 +8,7 @@ import torch
 
 from supertonic_reference_encoder.speech_autoencoder import (
     AutoencoderTrainConfig,
+    DiscriminatorOutput,
     evaluate_autoencoder_audio,
     load_autoencoder_checkpoint,
     MultiResolutionMelLoss,
@@ -20,6 +21,8 @@ from supertonic_reference_encoder.speech_autoencoder import (
     train_autoencoder,
     train_autoencoder_one_step,
     _assert_finite_losses,
+    _crop_adversarial_waveforms,
+    _discriminator_loss,
     _linear_log_spectrogram,
     _loss_precision_waveforms,
     _sanitize_waveform_for_discriminator,
@@ -81,8 +84,15 @@ def test_latent_decoder_uses_paper_dilation_pattern_and_projection_head():
     assert model.decoder.projection.kernel_size == (3,)
     assert model.decoder.projection.in_channels == 512
     assert model.decoder.projection.out_channels == 2048
-    assert model.decoder.frame_projection.in_features == 2048
-    assert model.decoder.frame_projection.out_features == 512
+    assert [type(layer) for layer in model.decoder.frame_projection] == [
+        torch.nn.Linear,
+        torch.nn.PReLU,
+        torch.nn.Linear,
+    ]
+    assert model.decoder.frame_projection[0].in_features == 2048
+    assert model.decoder.frame_projection[0].out_features == 2048
+    assert model.decoder.frame_projection[2].in_features == 2048
+    assert model.decoder.frame_projection[2].out_features == 512
     assert model.decoder.blocks[0].norm.eps == 1e-6
     assert torch.allclose(model.decoder.blocks[0].gamma, torch.full((512,), 0.1))
     assert torch.allclose(
@@ -163,6 +173,43 @@ def test_paper_adversarial_loss_updates_generator_and_discriminator():
     assert not torch.allclose(discriminator_before, _flatten_parameters(discriminators))
 
 
+def test_paper_adversarial_loss_uses_published_generator_weights():
+    loss = PaperAutoencoderAdversarialLoss(sample_rate=16_000)
+
+    assert loss.reconstruction_weight == 45.0
+    assert loss.adversarial_weight == 1.0
+    assert loss.feature_matching_weight == 0.1
+
+
+def test_discriminator_loss_uses_negative_one_for_fake_target():
+    real_outputs = [DiscriminatorOutput("real", score=torch.ones(1), features=[])]
+    fake_outputs = [DiscriminatorOutput("fake", score=torch.zeros(1), features=[])]
+
+    loss = _discriminator_loss(real_outputs, fake_outputs)
+
+    assert torch.isclose(loss, torch.tensor(0.5))
+
+
+def test_adversarial_waveforms_are_cropped_to_paper_window_with_shared_start():
+    sample_rate = 44_100
+    crop_samples = int(sample_rate * 0.19)
+    real = torch.arange(sample_rate, dtype=torch.float32).unsqueeze(0)
+    generated = real + 10_000
+    generator = torch.Generator().manual_seed(1234)
+
+    cropped_real, cropped_generated = _crop_adversarial_waveforms(
+        real,
+        generated,
+        sample_rate=sample_rate,
+        crop_seconds=0.19,
+        generator=generator,
+    )
+
+    assert cropped_real.shape == (1, crop_samples)
+    assert cropped_generated.shape == (1, crop_samples)
+    assert torch.allclose(cropped_generated - cropped_real, torch.full_like(cropped_real, 10_000))
+
+
 def _flatten_parameters(module: torch.nn.Module) -> torch.Tensor:
     return torch.cat([parameter.detach().flatten().cpu() for parameter in module.parameters()])
 
@@ -215,6 +262,7 @@ def test_mixed_precision_defaults_to_cuda_only():
         output_dir=Path("runs"),
     )
 
+    assert config.learning_rate == 2e-4
     assert config.mixed_precision
     assert config.amp_dtype == "bf16"
     assert _resolve_mixed_precision(torch.device("cuda"), requested=True)
@@ -325,6 +373,26 @@ def test_load_autoencoder_checkpoint_tolerates_pre_layer_scale_checkpoints(tmp_p
     target = SpeechAutoencoder(sample_rate=16_000)
 
     load_autoencoder_checkpoint(target, checkpoint)
+
+
+def test_load_autoencoder_checkpoint_migrates_pre_prelu_decoder_head(tmp_path):
+    source = SpeechAutoencoder(sample_rate=16_000)
+    state = source.state_dict()
+    old_decoder_weight = state.pop("decoder.frame_projection.2.weight")
+    old_decoder_bias = state.pop("decoder.frame_projection.2.bias")
+    state.pop("decoder.frame_projection.0.weight")
+    state.pop("decoder.frame_projection.0.bias")
+    state.pop("decoder.frame_projection.1.weight")
+    state["decoder.frame_projection.weight"] = old_decoder_weight
+    state["decoder.frame_projection.bias"] = old_decoder_bias
+    checkpoint = tmp_path / "checkpoint.pt"
+    torch.save({"model": state}, checkpoint)
+    target = SpeechAutoencoder(sample_rate=16_000)
+
+    load_autoencoder_checkpoint(target, checkpoint)
+
+    assert torch.allclose(target.decoder.frame_projection[2].weight, old_decoder_weight)
+    assert torch.allclose(target.decoder.frame_projection[2].bias, old_decoder_bias)
 
 
 def test_evaluate_autoencoder_audio_returns_validation_metrics(tmp_path):
