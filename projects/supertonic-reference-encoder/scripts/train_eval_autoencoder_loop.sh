@@ -4,8 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 INITIAL_CHECKPOINT="${INITIAL_CHECKPOINT:-checkpoints/autoencoder-public.pt}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-runs/autoencoder-cer-loop}"
-MAX_ROUNDS="${MAX_ROUNDS:-6}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-runs/autoencoder-cer-loop-3000}"
+MAX_ROUNDS="${MAX_ROUNDS:-3}"
 EPOCHS_PER_ROUND="${EPOCHS_PER_ROUND:-1000}"
 EVAL_LIMIT="${EVAL_LIMIT:-1000}"
 MIN_CER_IMPROVEMENT="${MIN_CER_IMPROVEMENT:-0.005}"

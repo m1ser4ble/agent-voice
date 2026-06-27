@@ -9,6 +9,8 @@ def test_train_eval_loop_script_runs_train_then_cer_eval_until_plateau():
 
     text = script.read_text(encoding="utf-8")
 
+    assert 'OUTPUT_ROOT="${OUTPUT_ROOT:-runs/autoencoder-cer-loop-3000}"' in text
+    assert 'MAX_ROUNDS="${MAX_ROUNDS:-3}"' in text
     assert 'EPOCHS_PER_ROUND="${EPOCHS_PER_ROUND:-1000}"' in text
     assert 'EVAL_LIMIT="${EVAL_LIMIT:-1000}"' in text
     assert 'MIN_CER_IMPROVEMENT="${MIN_CER_IMPROVEMENT:-0.005}"' in text
