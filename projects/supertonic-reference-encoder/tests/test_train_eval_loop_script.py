@@ -17,7 +17,9 @@ def test_train_eval_loop_script_runs_train_then_cer_eval_until_plateau():
     assert "scripts/train_autoencoder_cuda.sh" in text
     assert "scripts/eval_fleurs_autoencoder_cer.py" in text
     assert '--checkpoint "prev=' in text
-    assert '--checkpoint "current=' in text
+    assert '--checkpoint "best=' in text
+    assert '--checkpoint "latest=' in text
     assert "generated_mean_cer" in text
     assert "cer_improvement" in text
+    assert "accepted_checkpoint" in text
     assert "stopping: CER improvement below threshold" in text

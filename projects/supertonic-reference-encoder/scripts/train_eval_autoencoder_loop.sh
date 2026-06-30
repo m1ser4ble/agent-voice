@@ -57,20 +57,25 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
   AMP_DTYPE="$AMP_DTYPE" \
     scripts/train_autoencoder_cuda.sh
 
-  candidate_checkpoint="$train_dir/best.pt"
-  if [[ ! -f "$candidate_checkpoint" ]]; then
-    candidate_checkpoint="$train_dir/latest.pt"
-  fi
-  if [[ ! -f "$candidate_checkpoint" ]]; then
+  best_checkpoint="$train_dir/best.pt"
+  latest_checkpoint="$train_dir/latest.pt"
+  if [[ ! -f "$best_checkpoint" && ! -f "$latest_checkpoint" ]]; then
     echo "training did not produce best.pt or latest.pt in $train_dir" >&2
     exit 1
   fi
 
-  echo "round=$round eval prev=$previous_checkpoint current=$candidate_checkpoint output=$eval_dir"
+  checkpoint_args=(--checkpoint "prev=$previous_checkpoint")
+  if [[ -f "$best_checkpoint" ]]; then
+    checkpoint_args+=(--checkpoint "best=$best_checkpoint")
+  fi
+  if [[ -f "$latest_checkpoint" ]]; then
+    checkpoint_args+=(--checkpoint "latest=$latest_checkpoint")
+  fi
+
+  echo "round=$round eval prev=$previous_checkpoint best=$best_checkpoint latest=$latest_checkpoint output=$eval_dir"
   uv run --with datasets --with faster-whisper \
     python scripts/eval_fleurs_autoencoder_cer.py \
-      --checkpoint "prev=$previous_checkpoint" \
-      --checkpoint "current=$candidate_checkpoint" \
+      "${checkpoint_args[@]}" \
       --output-dir "$eval_dir" \
       --limit "$EVAL_LIMIT" \
       --whisper-model "$WHISPER_MODEL" \
@@ -89,7 +94,11 @@ decision_path = Path(sys.argv[3])
 summary = json.loads(summary_path.read_text(encoding="utf-8"))
 by_label = {item["label"]: item for item in summary["checkpoints"]}
 previous_cer = by_label["prev"]["generated_mean_cer"]
-current_cer = by_label["current"]["generated_mean_cer"]
+candidate = min(
+    (item for item in summary["checkpoints"] if item["label"] != "prev"),
+    key=lambda item: item["generated_mean_cer"],
+)
+current_cer = candidate["generated_mean_cer"]
 cer_improvement = previous_cer - current_cer
 continue_training = cer_improvement >= min_improvement
 decision = {
@@ -97,6 +106,8 @@ decision = {
     "current_generated_mean_cer": current_cer,
     "cer_improvement": cer_improvement,
     "min_cer_improvement": min_improvement,
+    "accepted_label": candidate["label"],
+    "accepted_checkpoint": candidate["checkpoint"],
     "continue_training": continue_training,
 }
 decision_path.write_text(json.dumps(decision, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -112,7 +123,15 @@ decision = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 raise SystemExit(0 if decision["continue_training"] else 1)
 PY
   then
-    current_checkpoint="$candidate_checkpoint"
+    current_checkpoint="$(python - "$decision_json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+decision = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(decision["accepted_checkpoint"])
+PY
+)"
     ln -sfn "$(realpath "$current_checkpoint")" "$OUTPUT_ROOT/accepted.pt"
     echo "continuing: CER improved enough; accepted=$current_checkpoint"
   else
